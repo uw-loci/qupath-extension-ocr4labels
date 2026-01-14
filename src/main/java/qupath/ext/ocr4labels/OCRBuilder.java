@@ -10,6 +10,7 @@ import qupath.ext.ocr4labels.utilities.LabelImageUtility;
 import qupath.lib.images.ImageData;
 import qupath.lib.scripting.QP;
 
+import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.util.Collections;
 import java.util.List;
@@ -35,6 +36,18 @@ import java.util.List;
  *     .detectOrientation()    // Enable orientation detection
  *     .autoRotate()           // Auto-rotate if sideways
  *     .run()
+ *
+ * // Region-based OCR (inspired by zindy/qupath-extension-ocr)
+ * def results = OCR4Labels.builder()
+ *     .sparseText()
+ *     .region(0, 70, 400, 90) // Only process specific area (x, y, width, height)
+ *     .run()
+ *
+ * // Restricted character set (inspired by zindy/qupath-extension-ocr)
+ * def results = OCR4Labels.builder()
+ *     .singleLine()
+ *     .allowedChars("0123456789")  // Only recognize digits
+ *     .run()
  * </pre>
  *
  * @author Michael Nelson
@@ -50,6 +63,10 @@ public class OCRBuilder {
     private boolean invertImage = false;
     private boolean detectOrientation = false;
     private boolean autoRotate = false;
+    // Inspired by zindy/qupath-extension-ocr - region-based OCR and character whitelist support
+    // See: https://github.com/zindy/qupath-extension-ocr
+    private Rectangle cropRegion = null;
+    private String characterWhitelist = null;
 
     /**
      * Creates a new builder with default settings.
@@ -249,6 +266,69 @@ public class OCRBuilder {
         return this;
     }
 
+    // ========== Region and Whitelist Methods ==========
+    // Inspired by zindy/qupath-extension-ocr
+    // See: https://github.com/zindy/qupath-extension-ocr
+
+    /**
+     * Set a region to crop before OCR processing.
+     * Only the specified region will be processed, which can improve
+     * accuracy and performance for labels with known text positions.
+     *
+     * <p>Inspired by zindy/qupath-extension-ocr region-based OCR support.</p>
+     *
+     * @param x      X coordinate of top-left corner
+     * @param y      Y coordinate of top-left corner
+     * @param width  Width of the region
+     * @param height Height of the region
+     * @return this builder
+     */
+    public OCRBuilder region(int x, int y, int width, int height) {
+        this.cropRegion = new Rectangle(x, y, width, height);
+        return this;
+    }
+
+    /**
+     * Clear any previously set region, processing the full image.
+     *
+     * @return this builder
+     */
+    public OCRBuilder fullImage() {
+        this.cropRegion = null;
+        return this;
+    }
+
+    /**
+     * Set a character whitelist to restrict OCR output to specific characters.
+     * This can significantly improve accuracy when you know the expected character set.
+     *
+     * <p>Inspired by zindy/qupath-extension-ocr character whitelist support.</p>
+     *
+     * <p>Examples:</p>
+     * <ul>
+     *   <li>{@code .allowedChars("0123456789")} - digits only</li>
+     *   <li>{@code .allowedChars("ABCDEFGHIJKLMNOPQRSTUVWXYZ")} - uppercase letters only</li>
+     *   <li>{@code .allowedChars("0123456789ABCDEF-")} - hex digits and hyphens</li>
+     * </ul>
+     *
+     * @param whitelist The allowed characters (e.g., "0123456789" for digits only)
+     * @return this builder
+     */
+    public OCRBuilder allowedChars(String whitelist) {
+        this.characterWhitelist = whitelist;
+        return this;
+    }
+
+    /**
+     * Clear any previously set character whitelist, allowing all characters.
+     *
+     * @return this builder
+     */
+    public OCRBuilder allChars() {
+        this.characterWhitelist = null;
+        return this;
+    }
+
     // ========== Build and Run Methods ==========
 
     /**
@@ -265,6 +345,8 @@ public class OCRBuilder {
                 .detectOrientation(detectOrientation)
                 .autoRotate(autoRotate)
                 .enablePreprocessing(true)
+                .cropRegion(cropRegion)
+                .characterWhitelist(characterWhitelist)
                 .build();
     }
 
@@ -435,13 +517,37 @@ public class OCRBuilder {
             }
         }
 
+        // Region (inspired by zindy/qupath-extension-ocr)
+        if (cropRegion != null) {
+            script.append("\n    .region(")
+                    .append(cropRegion.x).append(", ")
+                    .append(cropRegion.y).append(", ")
+                    .append(cropRegion.width).append(", ")
+                    .append(cropRegion.height).append(")");
+        }
+
+        // Character whitelist (inspired by zindy/qupath-extension-ocr)
+        if (characterWhitelist != null && !characterWhitelist.isEmpty()) {
+            script.append("\n    .allowedChars(\"").append(characterWhitelist).append("\")");
+        }
+
         script.append("\n    .run()");
         return script.toString();
     }
 
     @Override
     public String toString() {
-        return String.format("OCRBuilder[psm=%s, enhance=%b, invert=%b, conf=%.0f%%, orient=%b]",
-                pageSegMode, enhanceContrast, invertImage, minConfidence * 100, detectOrientation);
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("OCRBuilder[psm=%s, enhance=%b, invert=%b, conf=%.0f%%, orient=%b",
+                pageSegMode, enhanceContrast, invertImage, minConfidence * 100, detectOrientation));
+        if (cropRegion != null) {
+            sb.append(String.format(", region=(%d,%d,%d,%d)",
+                    cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height));
+        }
+        if (characterWhitelist != null && !characterWhitelist.isEmpty()) {
+            sb.append(", whitelist='").append(characterWhitelist).append("'");
+        }
+        sb.append("]");
+        return sb.toString();
     }
 }

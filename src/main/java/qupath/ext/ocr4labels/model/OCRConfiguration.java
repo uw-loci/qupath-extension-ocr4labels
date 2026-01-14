@@ -1,5 +1,6 @@
 package qupath.ext.ocr4labels.model;
 
+import java.awt.Rectangle;
 import java.util.Objects;
 
 /**
@@ -82,6 +83,9 @@ public class OCRConfiguration {
     private final boolean autoRotate;
     private final boolean enhanceContrast;
     private final boolean detectOrientation;
+    // Inspired by zindy/qupath-extension-ocr - region-based OCR and character whitelist support
+    private final Rectangle cropRegion;
+    private final String characterWhitelist;
 
     private OCRConfiguration(Builder builder) {
         this.pageSegMode = builder.pageSegMode;
@@ -92,6 +96,8 @@ public class OCRConfiguration {
         this.autoRotate = builder.autoRotate;
         this.enhanceContrast = builder.enhanceContrast;
         this.detectOrientation = builder.detectOrientation;
+        this.cropRegion = builder.cropRegion;
+        this.characterWhitelist = builder.characterWhitelist;
     }
 
     /**
@@ -120,7 +126,9 @@ public class OCRConfiguration {
                 .enablePreprocessing(enablePreprocessing)
                 .autoRotate(autoRotate)
                 .enhanceContrast(enhanceContrast)
-                .detectOrientation(detectOrientation);
+                .detectOrientation(detectOrientation)
+                .cropRegion(cropRegion)
+                .characterWhitelist(characterWhitelist);
     }
 
     public PageSegMode getPageSegMode() {
@@ -155,6 +163,44 @@ public class OCRConfiguration {
         return detectOrientation;
     }
 
+    /**
+     * Gets the region to crop before OCR processing.
+     * Inspired by zindy/qupath-extension-ocr region-based OCR support.
+     *
+     * @return The crop region, or null to process the full image
+     */
+    public Rectangle getCropRegion() {
+        return cropRegion;
+    }
+
+    /**
+     * Gets the character whitelist for OCR.
+     * Inspired by zindy/qupath-extension-ocr character whitelist support.
+     *
+     * @return The whitelist string (e.g., "0123456789"), or null for no restriction
+     */
+    public String getCharacterWhitelist() {
+        return characterWhitelist;
+    }
+
+    /**
+     * Checks if a crop region is defined.
+     *
+     * @return true if OCR should be limited to a specific region
+     */
+    public boolean hasCropRegion() {
+        return cropRegion != null;
+    }
+
+    /**
+     * Checks if a character whitelist is defined.
+     *
+     * @return true if OCR should be restricted to specific characters
+     */
+    public boolean hasCharacterWhitelist() {
+        return characterWhitelist != null && !characterWhitelist.isEmpty();
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -167,21 +213,34 @@ public class OCRConfiguration {
                detectOrientation == that.detectOrientation &&
                pageSegMode == that.pageSegMode &&
                engineMode == that.engineMode &&
-               Objects.equals(language, that.language);
+               Objects.equals(language, that.language) &&
+               Objects.equals(cropRegion, that.cropRegion) &&
+               Objects.equals(characterWhitelist, that.characterWhitelist);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(pageSegMode, engineMode, language, minConfidence,
-                enablePreprocessing, autoRotate, enhanceContrast, detectOrientation);
+                enablePreprocessing, autoRotate, enhanceContrast, detectOrientation,
+                cropRegion, characterWhitelist);
     }
 
     @Override
     public String toString() {
-        return String.format("OCRConfiguration[psm=%s, oem=%s, lang=%s, minConf=%.0f%%, " +
-                        "preprocess=%b, autoRotate=%b, contrast=%b, detectOrient=%b]",
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("OCRConfiguration[psm=%s, oem=%s, lang=%s, minConf=%.0f%%, " +
+                        "preprocess=%b, autoRotate=%b, contrast=%b, detectOrient=%b",
                 pageSegMode, engineMode, language, minConfidence * 100,
-                enablePreprocessing, autoRotate, enhanceContrast, detectOrientation);
+                enablePreprocessing, autoRotate, enhanceContrast, detectOrientation));
+        if (cropRegion != null) {
+            sb.append(String.format(", region=(%d,%d,%d,%d)",
+                    cropRegion.x, cropRegion.y, cropRegion.width, cropRegion.height));
+        }
+        if (characterWhitelist != null && !characterWhitelist.isEmpty()) {
+            sb.append(", whitelist='").append(characterWhitelist).append("'");
+        }
+        sb.append("]");
+        return sb.toString();
     }
 
     /**
@@ -196,6 +255,9 @@ public class OCRConfiguration {
         private boolean autoRotate = true;
         private boolean enhanceContrast = true;
         private boolean detectOrientation = true;
+        // Inspired by zindy/qupath-extension-ocr - region-based OCR and character whitelist support
+        private Rectangle cropRegion = null;
+        private String characterWhitelist = null;
 
         public Builder pageSegMode(PageSegMode mode) {
             this.pageSegMode = mode != null ? mode : PageSegMode.AUTO;
@@ -234,6 +296,47 @@ public class OCRConfiguration {
 
         public Builder detectOrientation(boolean enable) {
             this.detectOrientation = enable;
+            return this;
+        }
+
+        /**
+         * Sets a region to crop before OCR processing.
+         * Inspired by zindy/qupath-extension-ocr region-based OCR support.
+         *
+         * @param region The region to crop, or null to process the full image
+         * @return this builder
+         */
+        public Builder cropRegion(Rectangle region) {
+            this.cropRegion = region;
+            return this;
+        }
+
+        /**
+         * Sets a region to crop before OCR processing.
+         * Inspired by zindy/qupath-extension-ocr region-based OCR support.
+         *
+         * @param x      X coordinate of top-left corner
+         * @param y      Y coordinate of top-left corner
+         * @param width  Width of the region
+         * @param height Height of the region
+         * @return this builder
+         */
+        public Builder cropRegion(int x, int y, int width, int height) {
+            this.cropRegion = new Rectangle(x, y, width, height);
+            return this;
+        }
+
+        /**
+         * Sets a character whitelist to restrict OCR output.
+         * Inspired by zindy/qupath-extension-ocr character whitelist support.
+         *
+         * <p>Example: "0123456789" to only recognize digits.</p>
+         *
+         * @param whitelist The allowed characters, or null for no restriction
+         * @return this builder
+         */
+        public Builder characterWhitelist(String whitelist) {
+            this.characterWhitelist = whitelist;
             return this;
         }
 

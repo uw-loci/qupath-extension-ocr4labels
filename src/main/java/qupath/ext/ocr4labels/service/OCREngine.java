@@ -122,12 +122,18 @@ public class OCREngine {
             // Apply configuration
             applyConfiguration(config);
 
-            // Preprocess image if enabled
+            // Crop image if region specified
+            // Inspired by zindy/qupath-extension-ocr region-based OCR support
+            // See: https://github.com/zindy/qupath-extension-ocr
             BufferedImage processedImage = image;
+            if (config.hasCropRegion()) {
+                processedImage = cropImage(image, config.getCropRegion());
+            }
             int detectedOrientation = 0;
 
+            // Preprocess image if enabled
             if (config.isEnablePreprocessing()) {
-                processedImage = preprocessImage(image, config);
+                processedImage = preprocessImage(processedImage, config);
             }
 
             // Detect and correct orientation if enabled
@@ -198,6 +204,7 @@ public class OCREngine {
 
     /**
      * Applies configuration settings to the Tesseract instance.
+     * Character whitelist support inspired by zindy/qupath-extension-ocr.
      */
     private void applyConfiguration(OCRConfiguration config) {
         currentPageSegMode = config.getPageSegMode().getValue();
@@ -207,6 +214,48 @@ public class OCREngine {
         if (config.getLanguage() != null && !config.getLanguage().isEmpty()) {
             tesseract.setLanguage(config.getLanguage());
         }
+
+        // Apply character whitelist if specified
+        // Inspired by zindy/qupath-extension-ocr character whitelist support
+        // See: https://github.com/zindy/qupath-extension-ocr
+        if (config.hasCharacterWhitelist()) {
+            tesseract.setVariable("tessedit_char_whitelist", config.getCharacterWhitelist());
+            logger.debug("Character whitelist set: '{}'", config.getCharacterWhitelist());
+        } else {
+            // Clear any previously set whitelist
+            tesseract.setVariable("tessedit_char_whitelist", "");
+        }
+    }
+
+    /**
+     * Crops the image to the specified region.
+     * Inspired by zindy/qupath-extension-ocr region-based OCR support.
+     *
+     * @param image  The source image
+     * @param region The region to crop
+     * @return The cropped image, or the original if region is invalid
+     */
+    private BufferedImage cropImage(BufferedImage image, Rectangle region) {
+        if (region == null) {
+            return image;
+        }
+
+        // Clamp region to image bounds
+        int x = Math.max(0, region.x);
+        int y = Math.max(0, region.y);
+        int width = Math.min(region.width, image.getWidth() - x);
+        int height = Math.min(region.height, image.getHeight() - y);
+
+        // Validate dimensions
+        if (width <= 0 || height <= 0) {
+            logger.warn("Invalid crop region: ({}, {}, {}, {}) for image {}x{} - using full image",
+                    region.x, region.y, region.width, region.height,
+                    image.getWidth(), image.getHeight());
+            return image;
+        }
+
+        logger.debug("Cropping image to region: ({}, {}, {}, {})", x, y, width, height);
+        return image.getSubimage(x, y, width, height);
     }
 
     /**

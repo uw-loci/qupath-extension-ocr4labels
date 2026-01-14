@@ -39,6 +39,16 @@ import java.util.stream.Collectors;
  *     .minConfidence(0.5)
  *     .run()
  *
+ * // Region-based OCR (inspired by zindy/qupath-extension-ocr)
+ * def results = OCR4Labels.builder()
+ *     .region(0, 70, 400, 90)  // x, y, width, height
+ *     .run()
+ *
+ * // Restricted character set (inspired by zindy/qupath-extension-ocr)
+ * def results = OCR4Labels.builder()
+ *     .allowedChars("0123456789")  // digits only
+ *     .run()
+ *
  * // Set metadata from results
  * if (results.size() > 0) {
  *     OCR4Labels.setMetadataValue("OCR_field_0", results[0])
