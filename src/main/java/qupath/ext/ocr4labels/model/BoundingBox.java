@@ -110,6 +110,24 @@ public class BoundingBox {
         );
     }
 
+    /**
+     * Creates a new bounding box that is the union of this box and another.
+     * The result is the smallest box that contains both boxes.
+     *
+     * @param other The other bounding box
+     * @return A new bounding box containing both
+     */
+    public BoundingBox expandedWith(BoundingBox other) {
+        if (other == null) {
+            return this;
+        }
+        int minX = Math.min(this.x, other.x);
+        int minY = Math.min(this.y, other.y);
+        int maxX = Math.max(this.getMaxX(), other.getMaxX());
+        int maxY = Math.max(this.getMaxY(), other.getMaxY());
+        return new BoundingBox(minX, minY, maxX - minX, maxY - minY);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

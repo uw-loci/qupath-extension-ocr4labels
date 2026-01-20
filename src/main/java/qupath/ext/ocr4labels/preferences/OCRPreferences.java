@@ -29,7 +29,7 @@ public class OCRPreferences {
     private static final int DEFAULT_PAGE_SEG_MODE = 11; // PSM_SPARSE_TEXT (best for labels)
     private static final String DEFAULT_METADATA_PREFIX = "OCR_";
     private static final String DEFAULT_LABEL_IMAGE_KEYWORDS = "label,barcode";
-    private static final boolean DEFAULT_AUTO_RUN_ON_ENTRY_SWITCH = false;
+    private static final boolean DEFAULT_AUTO_RUN_ON_ENTRY_SWITCH = true;
 
     // Properties
     private static StringProperty languageProperty;

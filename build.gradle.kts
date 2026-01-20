@@ -33,6 +33,10 @@ dependencies {
     // Gson for JSON serialization (template save/load)
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // ZXing for barcode decoding (QR codes, Code128, DataMatrix, etc.)
+    implementation("com.google.zxing:core:3.5.4")
+    implementation("com.google.zxing:javase:3.5.4")
+
     // For testing
     testImplementation(libs.bundles.qupath)
     testImplementation("org.junit.jupiter:junit-jupiter:5.9.1")

@@ -1,6 +1,8 @@
 package qupath.ext.ocr4labels.ui;
 
 import javafx.application.Platform;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -21,10 +23,13 @@ import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.ocr4labels.controller.OCRController;
+import qupath.ext.ocr4labels.model.BarcodeResult;
 import qupath.ext.ocr4labels.model.BoundingBox;
 import qupath.ext.ocr4labels.model.OCRConfiguration;
 import qupath.ext.ocr4labels.model.OCRResult;
+import qupath.ext.ocr4labels.model.RegionType;
 import qupath.ext.ocr4labels.model.TextBlock;
+import qupath.ext.ocr4labels.service.UnifiedDecoderService;
 import qupath.ext.ocr4labels.preferences.OCRPreferences;
 import qupath.ext.ocr4labels.service.OCREngine;
 import qupath.ext.ocr4labels.utilities.LabelImageUtility;
@@ -100,7 +105,9 @@ public class OCRDialog {
     private double selectionEndX, selectionEndY;
     private boolean hasSelection = false;
     private ToggleButton selectRegionButton;
-    private Button scanRegionButton;
+    private ComboBox<RegionType> regionTypeCombo;
+    private ComboBox<String> scopeCombo;
+    private Button scanButton;
 
     // Template state
     private OCRTemplate currentTemplate;
@@ -209,15 +216,84 @@ public class OCRDialog {
     }
 
     private ToolBar createToolbar() {
-        runOCRButton = new Button(resources.getString("button.runOCR"));
-        runOCRButton.setOnAction(e -> runOCR());
-        // Highlight the Run OCR button with high contrast styling
-        runOCRButton.setStyle("-fx-font-weight: bold; -fx-background-color: #4a90d9; -fx-text-fill: white; " +
+        // === SCAN SECTION: Unified scanning controls ===
+
+        // Unified Scan button - primary action
+        scanButton = new Button("Scan");
+        scanButton.setOnAction(e -> performUnifiedScan());
+        scanButton.setStyle("-fx-font-weight: bold; -fx-background-color: #4a90d9; -fx-text-fill: white; " +
                 "-fx-border-color: #2d5a87; -fx-border-width: 2px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+        scanButton.setTooltip(new Tooltip(
+                "Scan the label image to extract content.\n\n" +
+                "What gets scanned depends on Scope:\n" +
+                "  Full Image: Scans the entire label\n" +
+                "  Selection: Scans only the drawn rectangle\n\n" +
+                "How content is decoded depends on Decode As:\n" +
+                "  Try Both: Looks for barcodes first, then OCR\n" +
+                "  Text: Uses OCR only\n" +
+                "  Barcode: Looks for barcodes only"));
 
         progressIndicator = new ProgressIndicator();
         progressIndicator.setMaxSize(24, 24);
         progressIndicator.setVisible(false);
+
+        // Scope dropdown: Full Image vs Selected Region
+        Label scopeLabel = new Label("Scope:");
+        scopeCombo = new ComboBox<>();
+        scopeCombo.getItems().addAll("Full Image", "Selection");
+        scopeCombo.setValue("Full Image");
+        scopeCombo.setTooltip(new Tooltip(
+                "What area to scan:\n\n" +
+                "Full Image: Process the entire label\n" +
+                "Selection: Process only the selected region\n" +
+                "           (draw a rectangle first)"));
+        scopeCombo.valueProperty().addListener((obs, old, newVal) -> updateScanButtonState());
+
+        // Type/Decode dropdown
+        Label decodeLabel = new Label("Decode As:");
+        regionTypeCombo = new ComboBox<>();
+        regionTypeCombo.getItems().addAll(RegionType.values());
+        regionTypeCombo.setValue(RegionType.AUTO);
+        regionTypeCombo.setTooltip(new Tooltip(
+                "How to decode the content:\n\n" +
+                "Try Both: Look for barcodes first, fall back to OCR\n" +
+                "          (recommended for unknown content)\n" +
+                "Text: Use OCR only (Tesseract)\n" +
+                "Barcode: Look for barcodes only (ZXing)\n" +
+                "         Supports QR, Code128, DataMatrix, etc."));
+
+        // === SELECTION SECTION ===
+
+        selectRegionButton = new ToggleButton("Draw Region");
+        selectRegionButton.setTooltip(new Tooltip(
+                "Click to enable drawing mode, then drag on the\n" +
+                "image to select a specific area to scan.\n\n" +
+                "After drawing, set Scope to 'Selection' and click Scan."));
+        selectRegionButton.setOnAction(e -> {
+            regionSelectionMode = selectRegionButton.isSelected();
+            if (!regionSelectionMode) {
+                hasSelection = false;
+                drawBoundingBoxes();
+            }
+            // Auto-switch scope when entering selection mode
+            if (regionSelectionMode) {
+                scopeCombo.setValue("Selection");
+            }
+            updateScanButtonState();
+        });
+
+        Button clearSelectionBtn = new Button("Clear");
+        clearSelectionBtn.setTooltip(new Tooltip("Clear the current selection"));
+        clearSelectionBtn.setOnAction(e -> {
+            hasSelection = false;
+            selectRegionButton.setSelected(false);
+            regionSelectionMode = false;
+            scopeCombo.setValue("Full Image");
+            drawBoundingBoxes();
+            updateScanButtonState();
+        });
+
+        // === OCR SETTINGS SECTION ===
 
         // PSM Mode dropdown - Sparse Text is best default for slide labels
         Label psmLabel = new Label("Mode:");
@@ -225,28 +301,27 @@ public class OCRDialog {
         psmCombo.getItems().addAll(PSMOption.values());
         psmCombo.setValue(PSMOption.SPARSE_TEXT);
         psmCombo.setTooltip(new Tooltip(
-                "How to search for text on the label:\n\n" +
+                "OCR text detection mode:\n\n" +
                 "Sparse Text: Best for labels - finds text scattered across the image\n" +
                 "Single Block: For labels with one paragraph of text\n" +
                 "Single Line/Word: For very simple labels\n\n" +
-                "Try different modes if text isn't detected."));
+                "Only affects text decoding, not barcode scanning."));
 
         // Confidence slider
         Label confLabel = new Label("Min Conf:");
         confSlider = new Slider(0, 100, OCRPreferences.getMinConfidence() * 100);
-        confSlider.setPrefWidth(100);
+        confSlider.setPrefWidth(80);
         confSlider.setShowTickMarks(true);
         confSlider.setMajorTickUnit(50);
         confSlider.setTooltip(new Tooltip(
-                "Minimum confidence level for detected text.\n\n" +
+                "Minimum confidence for text detection:\n\n" +
                 "Lower = show more text (may include errors)\n" +
                 "Higher = show only confident detections\n\n" +
-                "Try lowering this if text isn't being detected."));
+                "Only affects text decoding, not barcode scanning."));
 
         Label confValue = new Label(String.format("%.0f%%", confSlider.getValue()));
         confSlider.valueProperty().addListener((obs, old, newVal) -> {
                 confValue.setText(String.format("%.0f%%", newVal.doubleValue()));
-                // Persist the value for next session
                 OCRPreferences.setMinConfidence(newVal.doubleValue() / 100.0);
         });
 
@@ -254,56 +329,41 @@ public class OCRDialog {
         invertCheckBox = new CheckBox("Invert");
         invertCheckBox.setTooltip(new Tooltip(
                 "Flip dark and light colors.\n\n" +
-                "Use this if your label has light/white text on a dark background.\n" +
-                "Most labels have dark text on light background and don't need this."));
+                "Enable for light text on dark background.\n" +
+                "Affects both text and barcode scanning."));
 
         thresholdCheckBox = new CheckBox("Enhance");
         thresholdCheckBox.setSelected(true);
         thresholdCheckBox.setTooltip(new Tooltip(
-                "Improve image contrast before reading text.\n\n" +
-                "Helps with faded labels, colored backgrounds, or poor lighting.\n" +
-                "Usually best to leave this enabled."));
+                "Improve image contrast before scanning.\n\n" +
+                "Helps with faded labels or poor lighting.\n" +
+                "Usually best to leave enabled."));
 
-        // Region selection tools
-        selectRegionButton = new ToggleButton("Select Region");
-        selectRegionButton.setTooltip(new Tooltip(
-                "Draw a rectangle on the image to target a specific area.\n\n" +
-                "Use this when text isn't being detected - select the area\n" +
-                "containing the text, then click 'Scan Region' to analyze\n" +
-                "just that area with very sensitive settings."));
-        selectRegionButton.setOnAction(e -> {
-            regionSelectionMode = selectRegionButton.isSelected();
-            if (!regionSelectionMode) {
-                hasSelection = false;
-                drawBoundingBoxes();
-            }
-            updateScanRegionButton();
-        });
-
-        scanRegionButton = new Button("Scan Region");
-        scanRegionButton.setDisable(true);
-        scanRegionButton.setTooltip(new Tooltip(
-                "Run OCR on the selected region with very low confidence threshold.\n\n" +
-                "This is useful for difficult-to-read text that isn't being\n" +
-                "detected with normal settings."));
-        scanRegionButton.setOnAction(e -> scanSelectedRegion());
+        // Keep reference for backward compatibility
+        runOCRButton = scanButton;
 
         return new ToolBar(
-                runOCRButton,
+                // Scan section
+                scanButton,
                 progressIndicator,
                 new Separator(),
+                scopeLabel,
+                scopeCombo,
+                decodeLabel,
+                regionTypeCombo,
+                new Separator(),
+                // Selection section
+                selectRegionButton,
+                clearSelectionBtn,
+                new Separator(),
+                // OCR Settings section
                 psmLabel,
                 psmCombo,
-                new Separator(),
                 confLabel,
                 confSlider,
                 confValue,
-                new Separator(),
                 invertCheckBox,
-                thresholdCheckBox,
-                new Separator(),
-                selectRegionButton,
-                scanRegionButton
+                thresholdCheckBox
         );
     }
 
@@ -554,7 +614,7 @@ public class OCRDialog {
                     hasSelection = false;
                 }
                 drawBoundingBoxes();
-                updateScanRegionButton();
+                updateScanButtonState();
             }
         });
 
@@ -600,7 +660,34 @@ public class OCRDialog {
 
         zoomControls.getChildren().addAll(fitButton, actualButton);
 
-        panel.getChildren().addAll(titleLabel, imageScrollPane, zoomControls);
+        // Color legend for bounding boxes
+        HBox legendBox = new HBox(15);
+        legendBox.setAlignment(Pos.CENTER_LEFT);
+        legendBox.setPadding(new Insets(2, 0, 0, 0));
+
+        Label legendLabel = new Label("Box colors:");
+        legendLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: gray;");
+
+        Label textLegend = new Label("Text");
+        textLegend.setStyle("-fx-font-size: 10px; -fx-text-fill: #32CD32; -fx-font-weight: bold;"); // LIME
+
+        Label barcodeLegend = new Label("Barcode");
+        barcodeLegend.setStyle("-fx-font-size: 10px; -fx-text-fill: #1E90FF; -fx-font-weight: bold;"); // DODGERBLUE
+
+        Label autoLegend = new Label("Try Both");
+        autoLegend.setStyle("-fx-font-size: 10px; -fx-text-fill: #BA55D3; -fx-font-weight: bold;"); // MEDIUMPURPLE
+
+        Label selectedLegend = new Label("Selected");
+        selectedLegend.setStyle("-fx-font-size: 10px; -fx-text-fill: #FFD700; -fx-font-weight: bold;"); // YELLOW/GOLD
+
+        legendBox.getChildren().addAll(legendLabel, textLegend, barcodeLegend, autoLegend, selectedLegend);
+
+        // Combine zoom and legend in one row
+        HBox controlsRow = new HBox(20);
+        controlsRow.setAlignment(Pos.CENTER_LEFT);
+        controlsRow.getChildren().addAll(zoomControls, legendBox);
+
+        panel.getChildren().addAll(titleLabel, imageScrollPane, controlsRow);
         return panel;
     }
 
@@ -614,7 +701,7 @@ public class OCRDialog {
         // Fields table
         fieldsTable = new TableView<>(fieldEntries);
         fieldsTable.setEditable(true);
-        fieldsTable.setPlaceholder(new Label("Run OCR to detect text fields"));
+        fieldsTable.setPlaceholder(new Label("Click Scan to detect text and barcodes"));
         fieldsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
 
         // Field number column - matches numbers displayed on bounding boxes
@@ -638,6 +725,14 @@ public class OCRDialog {
         });
         textCol.setMinWidth(80);
         textCol.setPrefWidth(150);
+
+        // Decode As column - ComboBox for region type selection
+        TableColumn<OCRFieldEntry, RegionType> typeCol = new TableColumn<>("Decode As");
+        typeCol.setCellValueFactory(data -> data.getValue().regionTypeProperty());
+        typeCol.setCellFactory(col -> new RegionTypeCell());
+        typeCol.setMinWidth(80);
+        typeCol.setMaxWidth(100);
+        typeCol.setPrefWidth(90);
 
         // Metadata key column - flexible width, user can resize
         TableColumn<OCRFieldEntry, String> keyCol = new TableColumn<>(resources.getString("column.metadataKey"));
@@ -665,7 +760,8 @@ public class OCRDialog {
         confCol.setMaxWidth(60);
         confCol.setPrefWidth(55);
 
-        fieldsTable.getColumns().addAll(numCol, textCol, keyCol, confCol);
+        // Column order: #, Decode As, Text, Metadata Key, Confidence
+        fieldsTable.getColumns().addAll(numCol, typeCol, textCol, keyCol, confCol);
         VBox.setVgrow(fieldsTable, Priority.ALWAYS);
 
         // Handle selection
@@ -771,13 +867,13 @@ public class OCRDialog {
         filterBar.setAlignment(Pos.CENTER_LEFT);
         filterBar.setPadding(new Insets(2, 0, 2, 0));
 
-        Label filterLabel = new Label("Filters:");
+        Label filterLabel = new Label("Text Filters:");
         filterLabel.setStyle("-fx-font-size: 11px; -fx-font-weight: bold;");
         filterLabel.setTooltip(new Tooltip(
-                "Select filters BEFORE running OCR.\n" +
+                "Text post-processing filters (apply to OCR text only).\n\n" +
                 "Filters are applied automatically when text is detected.\n" +
                 "Toggle filters on/off to re-filter the displayed text.\n\n" +
-                "Blue = Keep these character types\n" +
+                "Blue = Keep specific character types\n" +
                 "Red = Remove or transform characters"));
 
         // Create filter checkboxes with color coding
@@ -1072,6 +1168,199 @@ public class OCRDialog {
         return buttonBar;
     }
 
+    /**
+     * Updates the scan button state based on current scope and selection.
+     */
+    private void updateScanButtonState() {
+        boolean selectionScope = "Selection".equals(scopeCombo.getValue());
+        boolean canScan = labelImage != null && (!selectionScope || hasSelection);
+        scanButton.setDisable(!canScan);
+
+        // Update button text to hint at action
+        if (selectionScope && !hasSelection) {
+            scanButton.setText("Scan (draw region first)");
+        } else {
+            scanButton.setText("Scan");
+        }
+    }
+
+    /**
+     * Performs unified scanning based on current scope and decode type settings.
+     * Consolidates "Run OCR", "Scan Region", and "Find Barcodes" into a single operation.
+     */
+    private void performUnifiedScan() {
+        if (labelImage == null) {
+            Dialogs.showWarningNotification("No Label Image",
+                    "Please select an image with a label first.");
+            return;
+        }
+
+        String scope = scopeCombo.getValue();
+        RegionType decodeType = regionTypeCombo.getValue();
+
+        if ("Selection".equals(scope)) {
+            if (!hasSelection) {
+                Dialogs.showWarningNotification("No Selection",
+                        "Please draw a rectangle on the image first,\nor change Scope to 'Full Image'.");
+                return;
+            }
+            // Scan selected region
+            scanSelectedRegion();
+        } else {
+            // Full image scan
+            if (decodeType == RegionType.BARCODE) {
+                // Barcode-only scan of full image
+                autoDetectBarcodes();
+            } else if (decodeType == RegionType.AUTO) {
+                // Auto mode: try barcodes first, then OCR
+                performAutoFullImageScan();
+            } else {
+                // Text-only scan (traditional OCR)
+                runOCR();
+            }
+        }
+    }
+
+    /**
+     * Performs AUTO mode scanning on full image: barcodes first, then OCR.
+     */
+    private void performAutoFullImageScan() {
+        if (labelImage == null) return;
+
+        logger.info("Starting AUTO mode full image scan: barcodes then OCR");
+        progressIndicator.setVisible(true);
+
+        BufferedImage scanImage = preprocessForOCR(labelImage);
+
+        // First try barcode detection
+        OCRController.getInstance().decodeBarcodeAsync(scanImage)
+                .thenAccept(barcodeResult -> {
+                    if (barcodeResult.hasBarcode()) {
+                        // Found barcodes - add them and then run OCR for any text
+                        Platform.runLater(() -> {
+                            addAutoDetectedBarcodes(barcodeResult);
+                            logger.info("AUTO: Found {} barcode(s), now running OCR",
+                                    barcodeResult.getBarcodeCount());
+                        });
+                    }
+                    // Also run OCR to find text
+                    runOCRAfterBarcodes(barcodeResult.hasBarcode());
+                })
+                .exceptionally(ex -> {
+                    // Barcode failed, just run OCR
+                    logger.debug("Barcode detection failed, running OCR only: {}", ex.getMessage());
+                    runOCRAfterBarcodes(false);
+                    return null;
+                });
+    }
+
+    /**
+     * Runs OCR as part of AUTO mode scanning after barcode detection.
+     */
+    private void runOCRAfterBarcodes(boolean foundBarcodes) {
+        PSMOption selectedPSM = psmCombo.getValue();
+        OCRConfiguration.PageSegMode psm = selectedPSM != null ? selectedPSM.getMode() : OCRConfiguration.PageSegMode.AUTO;
+
+        OCRConfiguration config = OCRConfiguration.builder()
+                .pageSegMode(psm)
+                .language(OCRPreferences.getLanguage())
+                .minConfidence(confSlider.getValue() / 100.0)
+                .autoRotate(OCRPreferences.isAutoRotate())
+                .detectOrientation(OCRPreferences.isDetectOrientation())
+                .enhanceContrast(thresholdCheckBox.isSelected())
+                .enablePreprocessing(true)
+                .build();
+
+        BufferedImage imageToProcess = preprocessForOCR(labelImage);
+
+        OCRController.getInstance().performOCRAsync(imageToProcess, config)
+                .thenAccept(result -> Platform.runLater(() -> {
+                    // Don't clear existing barcodes - add OCR results
+                    int barcodeCount = (int) fieldEntries.stream()
+                            .filter(e -> e.getRegionType() == RegionType.BARCODE)
+                            .count();
+
+                    if (foundBarcodes) {
+                        // Append OCR results to existing barcode results
+                        addOCRResultsWithoutClearing(result);
+                    } else {
+                        currentResult = result;
+                        populateFieldsTable(result);
+                    }
+
+                    drawBoundingBoxes();
+                    progressIndicator.setVisible(false);
+
+                    String modeInfo = selectedPSM != null ? selectedPSM.toString() : "Auto";
+                    if (foundBarcodes) {
+                        Dialogs.showInfoNotification("Auto Scan Complete",
+                                String.format("Found %d barcode(s) + %d text block(s)",
+                                        barcodeCount, result.getBlockCount()));
+                    } else {
+                        Dialogs.showInfoNotification("Scan Complete",
+                                String.format("Detected %d text blocks (Mode: %s)",
+                                        result.getBlockCount(), modeInfo));
+                    }
+                }))
+                .exceptionally(ex -> {
+                    Platform.runLater(() -> {
+                        progressIndicator.setVisible(false);
+                        if (foundBarcodes) {
+                            Dialogs.showInfoNotification("Partial Scan Complete",
+                                    "Found barcodes but OCR failed: " + ex.getMessage());
+                        } else {
+                            Dialogs.showErrorMessage("Scan Failed", ex.getMessage());
+                        }
+                    });
+                    return null;
+                });
+    }
+
+    /**
+     * Adds OCR results without clearing existing field entries (used in AUTO mode).
+     */
+    private void addOCRResultsWithoutClearing(OCRResult result) {
+        String prefix = OCRPreferences.getMetadataPrefix();
+        int index = fieldEntries.size();
+
+        for (TextBlock block : result.getTextBlocks()) {
+            if (block.getType() == TextBlock.BlockType.LINE && !block.isEmpty()) {
+                String suggestedKey = prefix + "field_" + index;
+                String originalText = block.getText();
+                OCRFieldEntry entry = new OCRFieldEntry(
+                        originalText,
+                        suggestedKey,
+                        block.getConfidence(),
+                        block.getBoundingBox()
+                );
+                entry.setText(applyActiveFilters(originalText));
+                fieldEntries.add(entry);
+                index++;
+            }
+        }
+
+        // If no lines, use words
+        if (index == fieldEntries.size()) {
+            for (TextBlock block : result.getTextBlocks()) {
+                if (block.getType() == TextBlock.BlockType.WORD && !block.isEmpty()) {
+                    String suggestedKey = prefix + "field_" + index;
+                    String originalText = block.getText();
+                    OCRFieldEntry entry = new OCRFieldEntry(
+                            originalText,
+                            suggestedKey,
+                            block.getConfidence(),
+                            block.getBoundingBox()
+                    );
+                    entry.setText(applyActiveFilters(originalText));
+                    fieldEntries.add(entry);
+                    index++;
+                }
+            }
+        }
+
+        updateMetadataPreview();
+    }
+
     private void runOCR() {
         if (labelImage == null) {
             Dialogs.showWarningNotification("No Label Image",
@@ -1286,19 +1575,37 @@ public class OCRDialog {
             double w = bbox.getWidth() * scale;
             double h = bbox.getHeight() * scale;
 
+            // Determine color based on region type
+            Color strokeColor;
+            String typeLabel;
             if (index == selectedIndex) {
-                gc.setStroke(Color.YELLOW);
+                strokeColor = Color.YELLOW;
                 gc.setLineWidth(3);
             } else {
-                gc.setStroke(Color.LIME);
+                switch (entry.getRegionType()) {
+                    case BARCODE:
+                        strokeColor = Color.DODGERBLUE;
+                        break;
+                    case AUTO:
+                        strokeColor = Color.MEDIUMPURPLE;
+                        break;
+                    case TEXT:
+                    default:
+                        strokeColor = Color.LIME;
+                        break;
+                }
                 gc.setLineWidth(2);
             }
+            gc.setStroke(strokeColor);
             gc.strokeRect(x, y, w, h);
+
+            // Draw label with type indicator
+            typeLabel = entry.getRegionType().getShortLabel();
 
             gc.setFill(Color.rgb(0, 0, 0, 0.7));
             gc.fillRect(x, y - 16, Math.min(w, 60), 16);
             gc.setFill(Color.WHITE);
-            gc.fillText(String.valueOf(index + 1), x + 3, y - 3);
+            gc.fillText(String.format("%d[%s]", index + 1, typeLabel), x + 3, y - 3);
 
             index++;
         }
@@ -1329,10 +1636,6 @@ public class OCRDialog {
         gc.fillText("Selection", x + 4, y - 4);
     }
 
-    private void updateScanRegionButton() {
-        scanRegionButton.setDisable(!hasSelection || labelImage == null);
-    }
-
     private void scanSelectedRegion() {
         if (!hasSelection || labelImage == null) {
             Dialogs.showWarningNotification("No Selection",
@@ -1355,7 +1658,8 @@ public class OCRDialog {
             return;
         }
 
-        logger.info("Scanning region: x={}, y={}, w={}, h={}", imgX, imgY, imgW, imgH);
+        RegionType selectedType = regionTypeCombo.getValue();
+        logger.info("Scanning region as {}: x={}, y={}, w={}, h={}", selectedType, imgX, imgY, imgW, imgH);
 
         BufferedImage regionImage = labelImage.getSubimage(imgX, imgY, imgW, imgH);
 
@@ -1365,53 +1669,355 @@ public class OCRDialog {
 
         progressIndicator.setVisible(true);
 
-        OCRConfiguration config = OCRConfiguration.builder()
-                .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
-                .language(OCRPreferences.getLanguage())
-                .minConfidence(0.1)
-                .autoRotate(OCRPreferences.isAutoRotate())
-                .detectOrientation(OCRPreferences.isDetectOrientation())
-                .enhanceContrast(thresholdCheckBox.isSelected())
-                .enablePreprocessing(true)
-                .build();
-
         final int offsetX = imgX;
         final int offsetY = imgY;
+        final BufferedImage finalRegionImage = regionImage;
+        final RegionType finalType = selectedType;
 
-        OCRController.getInstance().performOCRAsync(regionImage, config)
+        // Use unified decoding based on selected type
+        if (finalType == RegionType.BARCODE) {
+            // Direct barcode scanning - no OCR config needed
+            OCRController.getInstance().decodeBarcodeAsync(finalRegionImage)
+                    .thenAccept(result -> Platform.runLater(() -> {
+                        progressIndicator.setVisible(false);
+
+                        if (!result.hasBarcode()) {
+                            Dialogs.showInfoNotification("Barcode Scan Complete",
+                                    "No barcode detected in the selected region.\n\n" +
+                                    "Try:\n" +
+                                    "- Selecting a tighter area around the barcode\n" +
+                                    "- Toggling the Invert checkbox\n" +
+                                    "- Using AUTO mode to fall back to OCR");
+                        } else {
+                            addBarcodeResult(result, offsetX, offsetY);
+                            String formats = result.getBarcodeCount() == 1
+                                    ? result.getFormat()
+                                    : result.getBarcodeCount() + " barcodes";
+                            Dialogs.showInfoNotification("Barcode Scan Complete",
+                                    String.format("Found %s: %s", formats, result.getCombinedText()));
+                        }
+
+                        resetRegionSelection();
+                    }))
+                    .exceptionally(ex -> {
+                        Platform.runLater(() -> {
+                            progressIndicator.setVisible(false);
+                            Dialogs.showErrorMessage("Barcode Scan Failed", ex.getMessage());
+                        });
+                        return null;
+                    });
+        } else if (finalType == RegionType.AUTO) {
+            // AUTO mode: try barcode first, fall back to OCR
+            OCRConfiguration config = OCRConfiguration.builder()
+                    .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+                    .language(OCRPreferences.getLanguage())
+                    .minConfidence(0.1)
+                    .autoRotate(OCRPreferences.isAutoRotate())
+                    .detectOrientation(OCRPreferences.isDetectOrientation())
+                    .enhanceContrast(thresholdCheckBox.isSelected())
+                    .enablePreprocessing(true)
+                    .build();
+
+            java.awt.Rectangle region = new java.awt.Rectangle(0, 0, imgW, imgH);
+
+            OCRController.getInstance().decodeRegionAsync(finalRegionImage, region, RegionType.AUTO, config)
+                    .thenAccept(result -> Platform.runLater(() -> {
+                        progressIndicator.setVisible(false);
+
+                        if (!result.hasText()) {
+                            Dialogs.showInfoNotification("Auto Scan Complete",
+                                    "No content detected in the selected region.\n\n" +
+                                    "Try:\n" +
+                                    "- Selecting a tighter area around the content\n" +
+                                    "- Toggling the Invert checkbox\n" +
+                                    "- Specifying TEXT or BARCODE type explicitly");
+                        } else {
+                            addUnifiedResult(result, offsetX, offsetY);
+                            String typeInfo = result.getSourceType() == RegionType.BARCODE
+                                    ? String.format("[%s]", result.getFormat())
+                                    : "[Text]";
+                            Dialogs.showInfoNotification("Auto Scan Complete",
+                                    String.format("Found %s: %s", typeInfo, result.getText()));
+                        }
+
+                        resetRegionSelection();
+                    }))
+                    .exceptionally(ex -> {
+                        Platform.runLater(() -> {
+                            progressIndicator.setVisible(false);
+                            Dialogs.showErrorMessage("Auto Scan Failed", ex.getMessage());
+                        });
+                        return null;
+                    });
+        } else {
+            // TEXT mode: use OCR as before
+            OCRConfiguration config = OCRConfiguration.builder()
+                    .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+                    .language(OCRPreferences.getLanguage())
+                    .minConfidence(0.1)
+                    .autoRotate(OCRPreferences.isAutoRotate())
+                    .detectOrientation(OCRPreferences.isDetectOrientation())
+                    .enhanceContrast(thresholdCheckBox.isSelected())
+                    .enablePreprocessing(true)
+                    .build();
+
+            OCRController.getInstance().performOCRAsync(finalRegionImage, config)
+                    .thenAccept(result -> Platform.runLater(() -> {
+                        progressIndicator.setVisible(false);
+
+                        if (result.getBlockCount() == 0) {
+                            Dialogs.showInfoNotification("Region Scan Complete",
+                                    "No text detected in the selected region.\n\n" +
+                                    "Try:\n" +
+                                    "- Selecting a tighter area around the text\n" +
+                                    "- Toggling the Invert checkbox\n" +
+                                    "- Making sure the text is clearly visible");
+                        } else {
+                            addRegionResults(result, offsetX, offsetY, RegionType.TEXT);
+                            Dialogs.showInfoNotification("Region Scan Complete",
+                                    String.format("Found %d text blocks in the selected region.",
+                                            result.getBlockCount()));
+                        }
+
+                        resetRegionSelection();
+                    }))
+                    .exceptionally(ex -> {
+                        Platform.runLater(() -> {
+                            progressIndicator.setVisible(false);
+                            Dialogs.showErrorMessage("Region Scan Failed", ex.getMessage());
+                        });
+                        return null;
+                    });
+        }
+    }
+
+    /**
+     * Resets the region selection state after scanning.
+     */
+    private void resetRegionSelection() {
+        selectRegionButton.setSelected(false);
+        regionSelectionMode = false;
+        hasSelection = false;
+        drawBoundingBoxes();
+        updateScanButtonState();
+    }
+
+    /**
+     * Automatically detects all barcodes in the current label image.
+     * Scans the entire image and adds each detected barcode as a field entry.
+     */
+    private void autoDetectBarcodes() {
+        if (labelImage == null) {
+            Dialogs.showWarningNotification("No Label Image",
+                    "Please select an image with a label first.");
+            return;
+        }
+
+        logger.info("Starting automatic barcode detection on full label image");
+        progressIndicator.setVisible(true);
+
+        // Prepare image - apply inversion if checkbox is selected
+        BufferedImage scanImage = labelImage;
+        if (invertCheckBox.isSelected()) {
+            scanImage = invertImage(labelImage);
+        }
+
+        final BufferedImage finalImage = scanImage;
+
+        OCRController.getInstance().decodeBarcodeAsync(finalImage)
                 .thenAccept(result -> Platform.runLater(() -> {
                     progressIndicator.setVisible(false);
 
-                    if (result.getBlockCount() == 0) {
-                        Dialogs.showInfoNotification("Region Scan Complete",
-                                "No text detected in the selected region.\n\n" +
-                                "Try:\n" +
-                                "- Selecting a tighter area around the text\n" +
-                                "- Toggling the Invert checkbox\n" +
-                                "- Making sure the text is clearly visible");
+                    if (!result.hasBarcode()) {
+                        // Try with inverted image if original failed and invert wasn't already applied
+                        if (!invertCheckBox.isSelected()) {
+                            tryAutoDetectWithInversion();
+                        } else {
+                            Dialogs.showInfoNotification("No Barcodes Found",
+                                    "No barcodes were detected in the label image.\n\n" +
+                                    "Tips:\n" +
+                                    "- Ensure the barcode is clearly visible\n" +
+                                    "- Try toggling the Invert checkbox\n" +
+                                    "- Use 'Select Region' to manually select the barcode area");
+                        }
                     } else {
-                        addRegionResults(result, offsetX, offsetY);
-                        Dialogs.showInfoNotification("Region Scan Complete",
-                                String.format("Found %d text blocks in the selected region.",
-                                        result.getBlockCount()));
-                    }
+                        addAutoDetectedBarcodes(result);
 
-                    selectRegionButton.setSelected(false);
-                    regionSelectionMode = false;
-                    hasSelection = false;
-                    drawBoundingBoxes();
-                    updateScanRegionButton();
+                        String message = result.getBarcodeCount() == 1
+                                ? String.format("Found 1 barcode [%s]: %s",
+                                        result.getFormat(), result.getText())
+                                : String.format("Found %d barcodes", result.getBarcodeCount());
+
+                        Dialogs.showInfoNotification("Barcodes Detected", message);
+                    }
                 }))
                 .exceptionally(ex -> {
                     Platform.runLater(() -> {
                         progressIndicator.setVisible(false);
-                        Dialogs.showErrorMessage("Region Scan Failed", ex.getMessage());
+                        Dialogs.showErrorMessage("Barcode Detection Failed", ex.getMessage());
                     });
                     return null;
                 });
     }
 
+    /**
+     * Tries barcode detection with an inverted image as a fallback.
+     */
+    private void tryAutoDetectWithInversion() {
+        logger.debug("Retrying barcode detection with inverted image");
+        progressIndicator.setVisible(true);
+
+        BufferedImage invertedImage = invertImage(labelImage);
+
+        OCRController.getInstance().decodeBarcodeAsync(invertedImage)
+                .thenAccept(result -> Platform.runLater(() -> {
+                    progressIndicator.setVisible(false);
+
+                    if (!result.hasBarcode()) {
+                        Dialogs.showInfoNotification("No Barcodes Found",
+                                "No barcodes were detected in the label image.\n\n" +
+                                "Tips:\n" +
+                                "- Ensure the barcode is clearly visible\n" +
+                                "- The barcode may be damaged or low quality\n" +
+                                "- Use 'Select Region' to manually select the barcode area");
+                    } else {
+                        addAutoDetectedBarcodes(result);
+
+                        String message = result.getBarcodeCount() == 1
+                                ? String.format("Found 1 barcode [%s]: %s (using inverted image)",
+                                        result.getFormat(), result.getText())
+                                : String.format("Found %d barcodes (using inverted image)",
+                                        result.getBarcodeCount());
+
+                        Dialogs.showInfoNotification("Barcodes Detected", message);
+                    }
+                }))
+                .exceptionally(ex -> {
+                    Platform.runLater(() -> {
+                        progressIndicator.setVisible(false);
+                        Dialogs.showErrorMessage("Barcode Detection Failed", ex.getMessage());
+                    });
+                    return null;
+                });
+    }
+
+    /**
+     * Adds auto-detected barcodes to the fields table.
+     */
+    private void addAutoDetectedBarcodes(BarcodeResult result) {
+        String prefix = OCRPreferences.getMetadataPrefix();
+        int startIndex = fieldEntries.size();
+
+        for (BarcodeResult.DecodedBarcode barcode : result.getBarcodes()) {
+            String suggestedKey = prefix + "barcode_" + startIndex;
+
+            // Use the bounding box from ZXing detection
+            BoundingBox bbox = barcode.getBoundingBox();
+
+            OCRFieldEntry entry = new OCRFieldEntry(
+                    barcode.getText(),
+                    suggestedKey,
+                    1.0f, // Barcodes have 100% confidence when decoded
+                    bbox,
+                    RegionType.BARCODE
+            );
+            entry.setBarcodeFormat(barcode.getFormat());
+            fieldEntries.add(entry);
+
+            logger.info("Auto-detected barcode [{}]: '{}' at {}",
+                    barcode.getFormat(), barcode.getText(), bbox);
+
+            startIndex++;
+        }
+
+        updateMetadataPreview();
+        drawBoundingBoxes();
+    }
+
+    /**
+     * Adds a barcode result to the fields table.
+     */
+    private void addBarcodeResult(BarcodeResult result, int offsetX, int offsetY) {
+        String prefix = OCRPreferences.getMetadataPrefix();
+        int startIndex = fieldEntries.size();
+
+        for (BarcodeResult.DecodedBarcode barcode : result.getBarcodes()) {
+            String suggestedKey = prefix + "barcode_" + startIndex;
+
+            BoundingBox bbox = barcode.getBoundingBox();
+            BoundingBox adjustedBbox = null;
+            if (bbox != null) {
+                adjustedBbox = new BoundingBox(
+                        bbox.getX() + offsetX,
+                        bbox.getY() + offsetY,
+                        bbox.getWidth(),
+                        bbox.getHeight()
+                );
+            }
+
+            OCRFieldEntry entry = new OCRFieldEntry(
+                    barcode.getText(),
+                    suggestedKey,
+                    1.0f, // Barcodes have 100% confidence when decoded
+                    adjustedBbox,
+                    RegionType.BARCODE
+            );
+            entry.setBarcodeFormat(barcode.getFormat());
+            fieldEntries.add(entry);
+            startIndex++;
+        }
+
+        updateMetadataPreview();
+        drawBoundingBoxes();
+    }
+
+    /**
+     * Adds a unified decoder result to the fields table.
+     */
+    private void addUnifiedResult(UnifiedDecoderService.DecodedResult result, int offsetX, int offsetY) {
+        String prefix = OCRPreferences.getMetadataPrefix();
+        int startIndex = fieldEntries.size();
+
+        String suggestedKey = prefix + (result.getSourceType() == RegionType.BARCODE ? "barcode_" : "field_") + startIndex;
+
+        BoundingBox bbox = result.getBoundingBox();
+        BoundingBox adjustedBbox = null;
+        if (bbox != null) {
+            adjustedBbox = new BoundingBox(
+                    bbox.getX() + offsetX,
+                    bbox.getY() + offsetY,
+                    bbox.getWidth(),
+                    bbox.getHeight()
+            );
+        }
+
+        OCRFieldEntry entry = new OCRFieldEntry(
+                result.getText(),
+                suggestedKey,
+                result.getConfidence(),
+                adjustedBbox,
+                result.getSourceType()
+        );
+
+        if (result.getSourceType() == RegionType.BARCODE && result.getFormat() != null) {
+            entry.setBarcodeFormat(result.getFormat());
+        }
+
+        // Apply active filters to display text (for text results)
+        if (result.getSourceType() == RegionType.TEXT) {
+            entry.setText(applyActiveFilters(result.getText()));
+        }
+
+        fieldEntries.add(entry);
+        updateMetadataPreview();
+        drawBoundingBoxes();
+    }
+
     private void addRegionResults(OCRResult result, int offsetX, int offsetY) {
+        addRegionResults(result, offsetX, offsetY, RegionType.TEXT);
+    }
+
+    private void addRegionResults(OCRResult result, int offsetX, int offsetY, RegionType regionType) {
         String prefix = OCRPreferences.getMetadataPrefix();
         int startIndex = fieldEntries.size();
 
@@ -1436,7 +2042,8 @@ public class OCRDialog {
                         originalText,
                         suggestedKey,
                         block.getConfidence(),
-                        adjustedBox
+                        adjustedBox,
+                        regionType
                 );
                 // Apply active filters to display text
                 entry.setText(applyActiveFilters(originalText));
@@ -1468,7 +2075,8 @@ public class OCRDialog {
                             originalText,
                             suggestedKey,
                             block.getConfidence(),
-                            adjustedBox
+                            adjustedBox,
+                            regionType
                     );
                     // Apply active filters to display text
                     entry.setText(applyActiveFilters(originalText));
@@ -1573,6 +2181,7 @@ public class OCRDialog {
             String key = entry.getMetadataKey();
             String text = entry.getText();
             BoundingBox bbox = entry.getBoundingBox();
+            RegionType type = entry.getRegionType();
 
             OCRTemplate.FieldMapping mapping;
             if (bbox != null) {
@@ -1582,9 +2191,10 @@ public class OCRDialog {
                 double normW = bbox.getWidth() / (double) imgWidth;
                 double normH = bbox.getHeight() / (double) imgHeight;
 
-                mapping = new OCRTemplate.FieldMapping(i, key, text, normX, normY, normW, normH);
+                mapping = new OCRTemplate.FieldMapping(i, key, text, normX, normY, normW, normH, type);
             } else {
                 mapping = new OCRTemplate.FieldMapping(i, key, text);
+                mapping.setRegionType(type);
             }
             template.addFieldMapping(mapping);
         }
@@ -1646,11 +2256,13 @@ public class OCRDialog {
                         mapping.getExampleText() != null ? mapping.getExampleText() : "",
                         mapping.getMetadataKey() != null ? mapping.getMetadataKey() : prefix + "field_" + mapping.getFieldIndex(),
                         1.0f,
-                        null // Will be populated when applying template
+                        null, // Will be populated when applying template
+                        mapping.getRegionType()
                 );
                 fieldEntries.add(entry);
             }
             updateMetadataPreview();
+            drawBoundingBoxes();
 
             Dialogs.showInfoNotification("Template Loaded",
                     String.format("Loaded template '%s' with %d fields.%s",
@@ -1664,7 +2276,8 @@ public class OCRDialog {
     }
 
     /**
-     * Applies the loaded template to extract text from fixed positions.
+     * Applies the loaded template to extract content from fixed positions.
+     * Uses the appropriate decoder (OCR or barcode) based on each field's regionType.
      */
     private void applyTemplateToCurrentImage() {
         if (currentTemplate == null) {
@@ -1693,7 +2306,7 @@ public class OCRDialog {
         int imgHeight = labelImage.getHeight();
         double dilation = currentTemplate.getDilationFactor();
 
-        // Build OCR config - use very low confidence for fixed positions
+        // Build OCR config - used for TEXT and AUTO modes
         OCRConfiguration config = OCRConfiguration.builder()
                 .pageSegMode(OCRConfiguration.PageSegMode.SINGLE_BLOCK)
                 .language(OCRPreferences.getLanguage())
@@ -1701,7 +2314,7 @@ public class OCRDialog {
                 .enhanceContrast(thresholdCheckBox.isSelected())
                 .build();
 
-        // Process each field mapping
+        // Process each field mapping using unified decoder
         java.util.List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (OCRTemplate.FieldMapping mapping : currentTemplate.getFieldMappings()) {
@@ -1725,27 +2338,30 @@ public class OCRDialog {
             }
 
             final BufferedImage finalRegion = regionImage;
-            final int fieldIndex = mapping.getFieldIndex();
             final String metadataKey = mapping.getMetadataKey();
             final int[] finalBox = box;
+            final RegionType regionType = mapping.getRegionType();
+
+            java.awt.Rectangle region = new java.awt.Rectangle(0, 0, box[2], box[3]);
 
             java.util.concurrent.CompletableFuture<Void> future = OCRController.getInstance()
-                    .performOCRAsync(finalRegion, config)
+                    .decodeRegionAsync(finalRegion, region, regionType, config)
                     .thenAccept(result -> {
-                        String extractedText = "";
-                        if (result.hasText()) {
-                            // Get all text from the region
-                            extractedText = result.getTextBlocks().stream()
-                                    .map(TextBlock::getText)
-                                    .filter(t -> t != null && !t.isEmpty())
-                                    .reduce((a, b) -> a + " " + b)
-                                    .orElse("");
-                        }
-
-                        final String text = extractedText.trim();
                         Platform.runLater(() -> {
                             BoundingBox bbox = new BoundingBox(finalBox[0], finalBox[1], finalBox[2], finalBox[3]);
-                            OCRFieldEntry entry = new OCRFieldEntry(text, metadataKey, 1.0f, bbox);
+                            OCRFieldEntry entry = new OCRFieldEntry(
+                                    result.getText(),
+                                    metadataKey,
+                                    result.getConfidence(),
+                                    bbox,
+                                    result.getSourceType() != null ? result.getSourceType() : regionType
+                            );
+
+                            // Set barcode format if applicable
+                            if (result.getSourceType() == RegionType.BARCODE && result.getFormat() != null) {
+                                entry.setBarcodeFormat(result.getFormat());
+                            }
+
                             fieldEntries.add(entry);
                         });
                     });
@@ -1757,17 +2373,40 @@ public class OCRDialog {
         java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
                 .thenRun(() -> Platform.runLater(() -> {
                     progressIndicator.setVisible(false);
-                    // Sort by field index
+                    // Sort by metadata key
                     fieldEntries.sort((a, b) -> {
-                        int idxA = Integer.parseInt(a.getMetadataKey().replaceAll("\\D+", ""));
-                        int idxB = Integer.parseInt(b.getMetadataKey().replaceAll("\\D+", ""));
-                        return Integer.compare(idxA, idxB);
+                        String keyA = a.getMetadataKey().replaceAll("\\D+", "");
+                        String keyB = b.getMetadataKey().replaceAll("\\D+", "");
+                        try {
+                            return Integer.compare(
+                                    keyA.isEmpty() ? 0 : Integer.parseInt(keyA),
+                                    keyB.isEmpty() ? 0 : Integer.parseInt(keyB)
+                            );
+                        } catch (NumberFormatException e) {
+                            return a.getMetadataKey().compareTo(b.getMetadataKey());
+                        }
                     });
-                    // Apply active filters to extracted text
-                    reapplyFilters();
+                    // Apply active filters to text fields only
+                    for (OCRFieldEntry entry : fieldEntries) {
+                        if (entry.getRegionType() == RegionType.TEXT) {
+                            entry.setText(applyActiveFilters(entry.getOriginalText()));
+                        }
+                    }
                     drawBoundingBoxes();
-                    Dialogs.showInfoNotification("Template Applied",
-                            String.format("Extracted text from %d fixed positions.", fieldEntries.size()));
+
+                    // Count by type for notification
+                    long textCount = fieldEntries.stream()
+                            .filter(e -> e.getRegionType() == RegionType.TEXT)
+                            .count();
+                    long barcodeCount = fieldEntries.stream()
+                            .filter(e -> e.getRegionType() == RegionType.BARCODE)
+                            .count();
+
+                    String message = String.format("Extracted from %d positions", fieldEntries.size());
+                    if (textCount > 0 && barcodeCount > 0) {
+                        message += String.format(" (%d text, %d barcode)", textCount, barcodeCount);
+                    }
+                    Dialogs.showInfoNotification("Template Applied", message);
                 }))
                 .exceptionally(ex -> {
                     Platform.runLater(() -> {
@@ -1966,34 +2605,53 @@ public class OCRDialog {
     /**
      * Data class for table entries.
      * Stores both original OCR text and filtered display text.
+     * Implements FieldEntryProvider for template integration.
      */
-    public static class OCRFieldEntry {
+    public static class OCRFieldEntry implements OCRTemplate.FieldEntryProvider {
         private final String originalText;  // Original OCR result, never modified
         private final SimpleStringProperty text;  // Displayed text (may be filtered)
         private final SimpleStringProperty metadataKey;
+        private final ObjectProperty<RegionType> regionType;
         private final float confidence;
         private final BoundingBox boundingBox;
+        private String barcodeFormat;  // For barcode regions: the detected format
 
         public OCRFieldEntry(String text, String metadataKey, float confidence, BoundingBox boundingBox) {
+            this(text, metadataKey, confidence, boundingBox, RegionType.TEXT);
+        }
+
+        public OCRFieldEntry(String text, String metadataKey, float confidence, BoundingBox boundingBox,
+                             RegionType regionType) {
             this.originalText = text;
             this.text = new SimpleStringProperty(text);
             this.metadataKey = new SimpleStringProperty(metadataKey);
+            this.regionType = new SimpleObjectProperty<>(regionType != null ? regionType : RegionType.TEXT);
             this.confidence = confidence;
             this.boundingBox = boundingBox;
         }
 
         public String getOriginalText() { return originalText; }
 
+        @Override
         public String getText() { return text.get(); }
         public void setText(String value) { text.set(value); }
         public SimpleStringProperty textProperty() { return text; }
 
+        @Override
         public String getMetadataKey() { return metadataKey.get(); }
         public void setMetadataKey(String value) { metadataKey.set(value); }
         public SimpleStringProperty metadataKeyProperty() { return metadataKey; }
 
+        @Override
+        public RegionType getRegionType() { return regionType.get(); }
+        public void setRegionType(RegionType value) { regionType.set(value != null ? value : RegionType.TEXT); }
+        public ObjectProperty<RegionType> regionTypeProperty() { return regionType; }
+
         public float getConfidence() { return confidence; }
         public BoundingBox getBoundingBox() { return boundingBox; }
+
+        public String getBarcodeFormat() { return barcodeFormat; }
+        public void setBarcodeFormat(String format) { this.barcodeFormat = format; }
     }
 
     /**
@@ -2018,6 +2676,38 @@ public class OCRDialog {
                     setStyle("");
                     setTooltip(null);
                 }
+            }
+        }
+    }
+
+    /**
+     * Custom cell for region type selection with ComboBox.
+     */
+    private class RegionTypeCell extends TableCell<OCRFieldEntry, RegionType> {
+        private final ComboBox<RegionType> comboBox;
+
+        public RegionTypeCell() {
+            comboBox = new ComboBox<>();
+            comboBox.getItems().addAll(RegionType.values());
+            comboBox.setOnAction(e -> {
+                OCRFieldEntry entry = getTableView().getItems().get(getIndex());
+                entry.setRegionType(comboBox.getValue());
+                drawBoundingBoxes(); // Update overlay colors
+            });
+            comboBox.setMaxWidth(Double.MAX_VALUE);
+        }
+
+        @Override
+        protected void updateItem(RegionType item, boolean empty) {
+            super.updateItem(item, empty);
+
+            if (empty || item == null) {
+                setGraphic(null);
+                setText(null);
+            } else {
+                comboBox.setValue(item);
+                setGraphic(comboBox);
+                setText(null);
             }
         }
     }

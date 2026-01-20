@@ -47,6 +47,7 @@ public class OCRTemplate {
     /**
      * Represents a mapping from a detected field to a metadata key.
      * Optionally stores the bounding box for fixed-position OCR mode.
+     * Supports different region types (TEXT, BARCODE, AUTO) for hybrid decoding.
      */
     public static class FieldMapping {
         private int fieldIndex;
@@ -59,10 +60,13 @@ public class OCRTemplate {
         private double normalizedWidth;
         private double normalizedHeight;
         private boolean hasBoundingBox;
+        // Region type for hybrid decoding (TEXT, BARCODE, or AUTO)
+        private String regionType; // Stored as string for Gson compatibility
 
         public FieldMapping() {
             this.enabled = true;
             this.hasBoundingBox = false;
+            this.regionType = RegionType.TEXT.name(); // Default for backward compatibility
         }
 
         public FieldMapping(int fieldIndex, String metadataKey, String exampleText) {
@@ -71,6 +75,7 @@ public class OCRTemplate {
             this.exampleText = exampleText;
             this.enabled = true;
             this.hasBoundingBox = false;
+            this.regionType = RegionType.TEXT.name();
         }
 
         public FieldMapping(int fieldIndex, String metadataKey, String exampleText,
@@ -85,6 +90,26 @@ public class OCRTemplate {
             this.normalizedWidth = normalizedWidth;
             this.normalizedHeight = normalizedHeight;
             this.hasBoundingBox = true;
+            this.regionType = RegionType.TEXT.name();
+        }
+
+        /**
+         * Full constructor with region type support.
+         */
+        public FieldMapping(int fieldIndex, String metadataKey, String exampleText,
+                           double normalizedX, double normalizedY,
+                           double normalizedWidth, double normalizedHeight,
+                           RegionType regionType) {
+            this.fieldIndex = fieldIndex;
+            this.metadataKey = metadataKey;
+            this.exampleText = exampleText;
+            this.enabled = true;
+            this.normalizedX = normalizedX;
+            this.normalizedY = normalizedY;
+            this.normalizedWidth = normalizedWidth;
+            this.normalizedHeight = normalizedHeight;
+            this.hasBoundingBox = true;
+            this.regionType = regionType != null ? regionType.name() : RegionType.TEXT.name();
         }
 
         public int getFieldIndex() {
@@ -149,6 +174,25 @@ public class OCRTemplate {
         }
 
         /**
+         * Gets the region type for this field.
+         * Defaults to TEXT for backward compatibility with old templates.
+         *
+         * @return The region type
+         */
+        public RegionType getRegionType() {
+            return RegionType.fromString(regionType);
+        }
+
+        /**
+         * Sets the region type for this field.
+         *
+         * @param type The region type
+         */
+        public void setRegionType(RegionType type) {
+            this.regionType = type != null ? type.name() : RegionType.TEXT.name();
+        }
+
+        /**
          * Gets the bounding box coordinates scaled to an image of the given dimensions,
          * optionally dilated by the specified factor.
          *
@@ -181,8 +225,8 @@ public class OCRTemplate {
 
         @Override
         public String toString() {
-            return String.format("Field %d -> %s (example: '%s')",
-                    fieldIndex, metadataKey, exampleText);
+            return String.format("Field %d -> %s [%s] (example: '%s')",
+                    fieldIndex, metadataKey, getRegionType().getDisplayName(), exampleText);
         }
     }
 
@@ -313,6 +357,7 @@ public class OCRTemplate {
             // Only include entries with valid keys
             if (key != null && !key.isEmpty()) {
                 FieldMapping mapping = new FieldMapping(i, key, text);
+                mapping.setRegionType(entry.getRegionType());
                 template.addFieldMapping(mapping);
             }
         }
@@ -326,6 +371,16 @@ public class OCRTemplate {
     public interface FieldEntryProvider {
         String getText();
         String getMetadataKey();
+
+        /**
+         * Gets the region type for this field entry.
+         * Default implementation returns TEXT for backward compatibility.
+         *
+         * @return The region type
+         */
+        default RegionType getRegionType() {
+            return RegionType.TEXT;
+        }
     }
 
     @Override

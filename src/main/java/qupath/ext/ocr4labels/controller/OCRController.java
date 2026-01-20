@@ -3,10 +3,14 @@ package qupath.ext.ocr4labels.controller;
 import javafx.stage.DirectoryChooser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.ocr4labels.model.BarcodeResult;
 import qupath.ext.ocr4labels.model.OCRConfiguration;
 import qupath.ext.ocr4labels.model.OCRResult;
+import qupath.ext.ocr4labels.model.RegionType;
 import qupath.ext.ocr4labels.preferences.OCRPreferences;
+import qupath.ext.ocr4labels.service.BarcodeEngine;
 import qupath.ext.ocr4labels.service.OCREngine;
+import qupath.ext.ocr4labels.service.UnifiedDecoderService;
 import qupath.ext.ocr4labels.ui.BatchOCRDialog;
 import qupath.ext.ocr4labels.ui.OCRDialog;
 import qupath.ext.ocr4labels.ui.OCRSettingsDialog;
@@ -30,10 +34,13 @@ public class OCRController {
     private static OCRController instance;
 
     private OCREngine ocrEngine;
+    private BarcodeEngine barcodeEngine;
+    private UnifiedDecoderService unifiedDecoder;
     private boolean engineInitialized = false;
 
     private OCRController() {
         this.ocrEngine = new OCREngine();
+        this.barcodeEngine = new BarcodeEngine();
     }
 
     /**
@@ -173,6 +180,79 @@ public class OCRController {
     }
 
     /**
+     * Performs barcode decoding on an image.
+     *
+     * @param image The image to scan
+     * @return BarcodeResult containing decoded barcodes
+     */
+    public BarcodeResult decodeBarcode(BufferedImage image) {
+        return barcodeEngine.decodeWithRetry(image);
+    }
+
+    /**
+     * Performs barcode decoding asynchronously.
+     *
+     * @param image The image to scan
+     * @return CompletableFuture containing the barcode result
+     */
+    public CompletableFuture<BarcodeResult> decodeBarcodeAsync(BufferedImage image) {
+        return CompletableFuture.supplyAsync(() -> barcodeEngine.decodeWithRetry(image));
+    }
+
+    /**
+     * Performs unified decoding based on region type.
+     *
+     * @param image The image to process
+     * @param region The region to decode (null for full image)
+     * @param regionType The type of content (TEXT, BARCODE, or AUTO)
+     * @param config OCR configuration (used for TEXT and AUTO fallback)
+     * @return The decoded result
+     */
+    public UnifiedDecoderService.DecodedResult decodeRegion(
+            BufferedImage image,
+            java.awt.Rectangle region,
+            RegionType regionType,
+            OCRConfiguration config) {
+        if (unifiedDecoder == null) {
+            return UnifiedDecoderService.DecodedResult.error(
+                    "Unified decoder not initialized", 0);
+        }
+        return unifiedDecoder.decodeRegion(image, region, regionType, config);
+    }
+
+    /**
+     * Performs unified decoding asynchronously.
+     *
+     * @param image The image to process
+     * @param region The region to decode (null for full image)
+     * @param regionType The type of content (TEXT, BARCODE, or AUTO)
+     * @param config OCR configuration
+     * @return CompletableFuture containing the decoded result
+     */
+    public CompletableFuture<UnifiedDecoderService.DecodedResult> decodeRegionAsync(
+            BufferedImage image,
+            java.awt.Rectangle region,
+            RegionType regionType,
+            OCRConfiguration config) {
+        return CompletableFuture.supplyAsync(() ->
+                decodeRegion(image, region, regionType, config));
+    }
+
+    /**
+     * Gets the barcode engine for direct access.
+     */
+    public BarcodeEngine getBarcodeEngine() {
+        return barcodeEngine;
+    }
+
+    /**
+     * Gets the unified decoder service.
+     */
+    public UnifiedDecoderService getUnifiedDecoder() {
+        return unifiedDecoder;
+    }
+
+    /**
      * Ensures the OCR engine is initialized.
      * Prompts user for tessdata path if not configured.
      *
@@ -245,8 +325,9 @@ public class OCRController {
         // Initialize engine
         try {
             ocrEngine.initialize(tessdataPath, language);
+            unifiedDecoder = new UnifiedDecoderService(ocrEngine, barcodeEngine);
             engineInitialized = true;
-            logger.info("OCR engine initialized successfully");
+            logger.info("OCR engine and unified decoder initialized successfully");
             return true;
         } catch (OCREngine.OCRException e) {
             Dialogs.showErrorMessage("OCR Initialization Error",
@@ -313,6 +394,7 @@ public class OCRController {
         if (ocrEngine != null) {
             ocrEngine.dispose();
         }
+        unifiedDecoder = null;
         engineInitialized = false;
         logger.info("OCR controller disposed");
     }

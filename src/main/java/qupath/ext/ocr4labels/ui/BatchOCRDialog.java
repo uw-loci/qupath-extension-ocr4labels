@@ -16,12 +16,16 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.ocr4labels.controller.OCRController;
+import qupath.ext.ocr4labels.model.BoundingBox;
 import qupath.ext.ocr4labels.model.OCRConfiguration;
 import qupath.ext.ocr4labels.model.OCRResult;
 import qupath.ext.ocr4labels.model.OCRTemplate;
+import qupath.ext.ocr4labels.model.RegionType;
 import qupath.ext.ocr4labels.model.TextBlock;
 import qupath.ext.ocr4labels.preferences.OCRPreferences;
 import qupath.ext.ocr4labels.service.OCREngine;
+import qupath.ext.ocr4labels.service.UnifiedDecoderService;
 import qupath.ext.ocr4labels.utilities.LabelImageUtility;
 import qupath.ext.ocr4labels.utilities.OCRMetadataManager;
 import qupath.ext.ocr4labels.utilities.TextFilters;
@@ -223,6 +227,11 @@ public class BatchOCRDialog {
                 new SimpleStringProperty(String.valueOf(data.getValue().getFieldIndex() + 1)));
         indexCol.setPrefWidth(60);
 
+        TableColumn<OCRTemplate.FieldMapping, String> typeCol = new TableColumn<>("Type");
+        typeCol.setCellValueFactory(data ->
+                new SimpleStringProperty(data.getValue().getRegionType().getDisplayName()));
+        typeCol.setPrefWidth(70);
+
         TableColumn<OCRTemplate.FieldMapping, String> keyCol = new TableColumn<>("Metadata Key");
         keyCol.setCellValueFactory(data ->
                 new SimpleStringProperty(data.getValue().getMetadataKey()));
@@ -233,7 +242,7 @@ public class BatchOCRDialog {
                 new SimpleStringProperty(data.getValue().getExampleText()));
         exampleCol.setPrefWidth(250);
 
-        templateTable.getColumns().addAll(enabledCol, indexCol, keyCol, exampleCol);
+        templateTable.getColumns().addAll(enabledCol, indexCol, typeCol, keyCol, exampleCol);
         VBox.setVgrow(templateTable, Priority.ALWAYS);
 
         section.getChildren().addAll(toolbar, templateTable);
@@ -933,51 +942,14 @@ public class BatchOCRDialog {
                 return;
             }
 
-            OCRResult result = ocrEngine.processImage(labelImage, config);
-
-            // Extract text blocks
-            List<String> detectedTexts = new ArrayList<>();
-            for (TextBlock block : result.getTextBlocks()) {
-                if (block.getType() == TextBlock.BlockType.LINE && !block.isEmpty()) {
-                    detectedTexts.add(block.getText());
-                }
-            }
-            if (detectedTexts.isEmpty()) {
-                for (TextBlock block : result.getTextBlocks()) {
-                    if (block.getType() == TextBlock.BlockType.WORD && !block.isEmpty()) {
-                        detectedTexts.add(block.getText());
-                    }
-                }
-            }
-
-            entry.setFieldsFound(String.valueOf(detectedTexts.size()));
-            entry.setDetectedTexts(detectedTexts);
-
-            // Build metadata and populate editable field properties
-            int fieldsPopulated = 0;
-            for (OCRTemplate.FieldMapping mapping : currentTemplate.getFieldMappings()) {
-                if (!mapping.isEnabled()) continue;
-
-                int idx = mapping.getFieldIndex();
-                String key = mapping.getMetadataKey();
-                if (idx < detectedTexts.size()) {
-                    String value = detectedTexts.get(idx);
-                    entry.setFieldValue(key, value);
-                    fieldsPopulated++;
-                } else {
-                    // Field not found - set empty
-                    entry.setFieldValue(key, "");
-                }
-            }
-
-            // Update preview (for backward compatibility)
-            if (fieldsPopulated == 0) {
-                entry.setMetadataPreview("(no matching fields)");
+            // Check if template has bounding box data (fixed-position mode)
+            if (currentTemplate.hasBoundingBoxData()) {
+                // Use position-based extraction with unified decoder
+                processImageWithPositions(entry, labelImage, config);
             } else {
-                entry.setMetadataPreview(fieldsPopulated + " fields");
+                // Use general OCR (original behavior)
+                processImageWithGenericOCR(entry, labelImage, config);
             }
-
-            entry.setStatus("Done");
 
         } catch (Exception e) {
             logger.error("Error processing image: {}", entry.getImageName(), e);
@@ -985,6 +957,126 @@ public class BatchOCRDialog {
             entry.setFieldsFound("N/A");
             entry.setMetadataPreview(e.getMessage());
         }
+    }
+
+    /**
+     * Process image using fixed-position extraction with unified decoder.
+     * Supports mixed TEXT and BARCODE regions from template.
+     */
+    private void processImageWithPositions(ImageProcessingEntry entry, BufferedImage labelImage,
+                                            OCRConfiguration config) {
+        int imgWidth = labelImage.getWidth();
+        int imgHeight = labelImage.getHeight();
+        double dilation = currentTemplate.getDilationFactor();
+
+        int fieldsPopulated = 0;
+        int textFields = 0;
+        int barcodeFields = 0;
+
+        for (OCRTemplate.FieldMapping mapping : currentTemplate.getFieldMappings()) {
+            if (!mapping.isEnabled() || !mapping.hasBoundingBox()) continue;
+
+            int[] box = mapping.getScaledBoundingBox(imgWidth, imgHeight, dilation);
+            if (box == null || box[2] < 5 || box[3] < 5) continue;
+
+            String key = mapping.getMetadataKey();
+            RegionType regionType = mapping.getRegionType();
+
+            try {
+                // Extract region
+                BufferedImage regionImage = labelImage.getSubimage(box[0], box[1], box[2], box[3]);
+
+                // Use unified decoder based on region type
+                java.awt.Rectangle region = new java.awt.Rectangle(0, 0, box[2], box[3]);
+                UnifiedDecoderService.DecodedResult result =
+                        OCRController.getInstance().decodeRegion(regionImage, region, regionType, config);
+
+                if (result.hasText()) {
+                    entry.setFieldValue(key, result.getText());
+                    fieldsPopulated++;
+
+                    if (result.getSourceType() == RegionType.BARCODE) {
+                        barcodeFields++;
+                    } else {
+                        textFields++;
+                    }
+                } else {
+                    entry.setFieldValue(key, "");
+                }
+
+            } catch (Exception e) {
+                logger.warn("Failed to extract region for field {}: {}", key, e.getMessage());
+                entry.setFieldValue(key, "");
+            }
+        }
+
+        entry.setFieldsFound(String.valueOf(fieldsPopulated));
+
+        // Update preview with type breakdown
+        if (fieldsPopulated == 0) {
+            entry.setMetadataPreview("(no matching fields)");
+        } else {
+            String preview = fieldsPopulated + " fields";
+            if (textFields > 0 && barcodeFields > 0) {
+                preview += String.format(" (%d text, %d barcode)", textFields, barcodeFields);
+            }
+            entry.setMetadataPreview(preview);
+        }
+
+        entry.setStatus("Done");
+    }
+
+    /**
+     * Process image using general OCR without position data.
+     * Original behavior for templates without bounding boxes.
+     */
+    private void processImageWithGenericOCR(ImageProcessingEntry entry, BufferedImage labelImage,
+                                             OCRConfiguration config) throws OCREngine.OCRException {
+        OCRResult result = ocrEngine.processImage(labelImage, config);
+
+        // Extract text blocks
+        List<String> detectedTexts = new ArrayList<>();
+        for (TextBlock block : result.getTextBlocks()) {
+            if (block.getType() == TextBlock.BlockType.LINE && !block.isEmpty()) {
+                detectedTexts.add(block.getText());
+            }
+        }
+        if (detectedTexts.isEmpty()) {
+            for (TextBlock block : result.getTextBlocks()) {
+                if (block.getType() == TextBlock.BlockType.WORD && !block.isEmpty()) {
+                    detectedTexts.add(block.getText());
+                }
+            }
+        }
+
+        entry.setFieldsFound(String.valueOf(detectedTexts.size()));
+        entry.setDetectedTexts(detectedTexts);
+
+        // Build metadata and populate editable field properties
+        int fieldsPopulated = 0;
+        for (OCRTemplate.FieldMapping mapping : currentTemplate.getFieldMappings()) {
+            if (!mapping.isEnabled()) continue;
+
+            int idx = mapping.getFieldIndex();
+            String key = mapping.getMetadataKey();
+            if (idx < detectedTexts.size()) {
+                String value = detectedTexts.get(idx);
+                entry.setFieldValue(key, value);
+                fieldsPopulated++;
+            } else {
+                // Field not found - set empty
+                entry.setFieldValue(key, "");
+            }
+        }
+
+        // Update preview (for backward compatibility)
+        if (fieldsPopulated == 0) {
+            entry.setMetadataPreview("(no matching fields)");
+        } else {
+            entry.setMetadataPreview(fieldsPopulated + " fields");
+        }
+
+        entry.setStatus("Done");
     }
 
     private void applyAllMetadata() {
