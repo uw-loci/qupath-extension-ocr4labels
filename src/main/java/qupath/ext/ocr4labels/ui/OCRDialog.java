@@ -16,6 +16,7 @@ import javafx.scene.control.*;
 import javafx.scene.control.cell.TextFieldTableCell;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.stage.Modality;
@@ -126,6 +127,16 @@ public class OCRDialog {
     // Text filter checkboxes - applied before OCR results are displayed
     private final Map<TextFilters.TextFilter, CheckBox> filterCheckBoxes = new LinkedHashMap<>();
 
+    // Dirty state tracking - prompt to save template before closing
+    private boolean isDirty = false;
+    private String lastSavedState = "";
+
+    // Undo/Redo support
+    private static final int MAX_UNDO_LEVELS = 50;
+    private final java.util.Deque<List<FieldSnapshot>> undoStack = new java.util.ArrayDeque<>();
+    private final java.util.Deque<List<FieldSnapshot>> redoStack = new java.util.ArrayDeque<>();
+    private boolean isUndoRedoOperation = false;
+
     /**
      * Shows the OCR dialog for processing project entries.
      *
@@ -171,10 +182,57 @@ public class OCRDialog {
         Scene scene = new Scene(root, OCRPreferences.getDialogWidth(), OCRPreferences.getDialogHeight());
         stage.setScene(scene);
 
-        // Save dialog size on close
+        // Handle close request - check for unsaved changes
         stage.setOnCloseRequest(e -> {
             OCRPreferences.setDialogWidth(stage.getWidth());
             OCRPreferences.setDialogHeight(stage.getHeight());
+
+            if (isDirty && !fieldEntries.isEmpty()) {
+                // Prompt user about unsaved changes
+                ButtonType saveBtn = new ButtonType("Save Template...", ButtonBar.ButtonData.YES);
+                ButtonType discardBtn = new ButtonType("Discard", ButtonBar.ButtonData.NO);
+                ButtonType cancelBtn = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+
+                var result = Dialogs.builder()
+                        .title("Unsaved Changes")
+                        .contentText("You have unsaved field mappings.\n\nWould you like to save them as a template before closing?")
+                        .buttons(saveBtn, discardBtn, cancelBtn)
+                        .showAndWait()
+                        .orElse(cancelBtn);
+
+                if (result == saveBtn) {
+                    saveTemplate();
+                    // If still dirty after save attempt (user cancelled save dialog), cancel close
+                    if (isDirty) {
+                        e.consume();
+                    }
+                } else if (result == cancelBtn) {
+                    e.consume(); // Cancel the close
+                }
+                // Discard: let it close
+            }
+        });
+
+        // Add keyboard shortcuts for undo/redo
+        scene.setOnKeyPressed(e -> {
+            if (e.isControlDown() || e.isMetaDown()) {
+                switch (e.getCode()) {
+                    case Z:
+                        if (e.isShiftDown()) {
+                            redo(); // Ctrl+Shift+Z = redo (alternative)
+                        } else {
+                            undo(); // Ctrl+Z = undo
+                        }
+                        e.consume();
+                        break;
+                    case Y:
+                        redo(); // Ctrl+Y = redo
+                        e.consume();
+                        break;
+                    default:
+                        break;
+                }
+            }
         });
 
         stage.show();
@@ -421,9 +479,41 @@ public class OCRDialog {
             }
         });
 
-        // Handle selection changes
+        // Handle selection changes with dirty state check
         entryListView.getSelectionModel().selectedItemProperty().addListener((obs, oldEntry, newEntry) -> {
-            if (newEntry != null) {
+            if (newEntry != null && newEntry != oldEntry) {
+                if (isDirty && !fieldEntries.isEmpty()) {
+                    // Prompt before switching
+                    ButtonType saveBtn = new ButtonType("Save", ButtonBar.ButtonData.YES);
+                    ButtonType discardBtn = new ButtonType("Discard", ButtonBar.ButtonData.NO);
+                    ButtonType cancelBtn = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+
+                    var result = Dialogs.builder()
+                            .title("Unsaved Changes")
+                            .contentText("Save current field mappings before switching images?")
+                            .buttons(saveBtn, discardBtn, cancelBtn)
+                            .showAndWait()
+                            .orElse(cancelBtn);
+
+                    if (result == saveBtn) {
+                        saveTemplate();
+                    } else if (result == cancelBtn) {
+                        // Revert selection - need to do this on next frame to avoid listener recursion
+                        Platform.runLater(() -> entryListView.getSelectionModel().select(oldEntry));
+                        return;
+                    }
+                    // Discard or saved - continue with switch
+                }
+                // Reset dirty state and undo history for new image
+                isDirty = false;
+                lastSavedState = "";
+                clearUndoHistory();
+                if (stage != null) {
+                    String title = stage.getTitle();
+                    if (title.endsWith(" *")) {
+                        stage.setTitle(title.substring(0, title.length() - 2));
+                    }
+                }
                 onEntrySelected(newEntry);
             }
         });
@@ -612,9 +702,14 @@ public class OCRDialog {
                 double height = Math.abs(selectionEndY - selectionStartY);
                 if (width < 5 || height < 5) {
                     hasSelection = false;
+                    drawBoundingBoxes();
+                    updateScanButtonState();
+                } else {
+                    // Valid selection - show context menu
+                    drawBoundingBoxes();
+                    updateScanButtonState();
+                    showRegionContextMenu(e.getScreenX(), e.getScreenY());
                 }
-                drawBoundingBoxes();
-                updateScanButtonState();
             }
         });
 
@@ -720,6 +815,7 @@ public class OCRDialog {
         textCol.setCellValueFactory(data -> data.getValue().textProperty());
         textCol.setCellFactory(TextFieldTableCell.forTableColumn());
         textCol.setOnEditCommit(e -> {
+            saveStateForUndo();
             e.getRowValue().setText(e.getNewValue());
             updateMetadataPreview();
         });
@@ -742,6 +838,7 @@ public class OCRDialog {
             String newKey = e.getNewValue();
             MetadataKeyValidator.ValidationResult validation = MetadataKeyValidator.validateKey(newKey);
             if (validation.isValid()) {
+                saveStateForUndo();
                 e.getRowValue().setMetadataKey(newKey);
             } else {
                 Dialogs.showWarningNotification("Invalid Key", validation.getErrorMessage());
@@ -782,6 +879,7 @@ public class OCRDialog {
         removeButton.setOnAction(e -> {
             OCRFieldEntry selected = fieldsTable.getSelectionModel().getSelectedItem();
             if (selected != null) {
+                saveStateForUndo();
                 fieldEntries.remove(selected);
                 updateMetadataPreview();
                 drawBoundingBoxes();
@@ -793,9 +891,12 @@ public class OCRDialog {
 
         Button clearButton = new Button(resources.getString("button.clearAll"));
         clearButton.setOnAction(e -> {
-            fieldEntries.clear();
-            updateMetadataPreview();
-            drawBoundingBoxes();
+            if (!fieldEntries.isEmpty()) {
+                saveStateForUndo();
+                fieldEntries.clear();
+                updateMetadataPreview();
+                drawBoundingBoxes();
+            }
         });
 
         buttonBar.getChildren().addAll(addButton, removeButton, clearButton);
@@ -954,7 +1055,8 @@ public class OCRDialog {
 
         // Status label showing loaded vocabulary info
         vocabularyStatusLabel = new Label("");
-        vocabularyStatusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #666666;");
+        // Use gray keyword instead of hex for dark mode compatibility
+        vocabularyStatusLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: gray;");
 
         // Store match button reference for enabling/disabling
         loadVocabBtn.setUserData(matchBtn);
@@ -1432,6 +1534,9 @@ public class OCRDialog {
     }
 
     private void populateFieldsTable(OCRResult result) {
+        if (!fieldEntries.isEmpty()) {
+            saveStateForUndo();
+        }
         fieldEntries.clear();
 
         String prefix = OCRPreferences.getMetadataPrefix();
@@ -1798,8 +1903,70 @@ public class OCRDialog {
         selectRegionButton.setSelected(false);
         regionSelectionMode = false;
         hasSelection = false;
+        scopeCombo.setValue("Full Image");
         drawBoundingBoxes();
         updateScanButtonState();
+    }
+
+    /**
+     * Shows a context menu after the user finishes drawing a region.
+     * Allows quick selection of scan type without using the toolbar dropdowns.
+     */
+    private void showRegionContextMenu(double screenX, double screenY) {
+        ContextMenu contextMenu = new ContextMenu();
+
+        MenuItem scanAutoItem = new MenuItem("Scan (Try Both)");
+        scanAutoItem.setOnAction(e -> {
+            regionTypeCombo.setValue(RegionType.AUTO);
+            scopeCombo.setValue("Selection");
+            scanSelectedRegion();
+        });
+
+        MenuItem scanTextItem = new MenuItem("Scan as Text");
+        scanTextItem.setOnAction(e -> {
+            regionTypeCombo.setValue(RegionType.TEXT);
+            scopeCombo.setValue("Selection");
+            scanSelectedRegion();
+        });
+
+        MenuItem scanBarcodeItem = new MenuItem("Scan as Barcode");
+        scanBarcodeItem.setOnAction(e -> {
+            regionTypeCombo.setValue(RegionType.BARCODE);
+            scopeCombo.setValue("Selection");
+            scanSelectedRegion();
+        });
+
+        SeparatorMenuItem separator = new SeparatorMenuItem();
+
+        MenuItem keepSelectionItem = new MenuItem("Keep Selection");
+        keepSelectionItem.setOnAction(e -> {
+            // Just close the menu, keep the selection for manual scanning
+            scopeCombo.setValue("Selection");
+        });
+
+        MenuItem cancelItem = new MenuItem("Clear Selection");
+        cancelItem.setOnAction(e -> {
+            hasSelection = false;
+            selectRegionButton.setSelected(false);
+            regionSelectionMode = false;
+            scopeCombo.setValue("Full Image");
+            drawBoundingBoxes();
+            updateScanButtonState();
+        });
+
+        contextMenu.getItems().addAll(
+                scanAutoItem,
+                scanTextItem,
+                scanBarcodeItem,
+                separator,
+                keepSelectionItem,
+                cancelItem
+        );
+
+        // Auto-hide when focus is lost
+        contextMenu.setAutoHide(true);
+
+        contextMenu.show(overlayCanvas, screenX, screenY);
     }
 
     /**
@@ -1905,6 +2072,7 @@ public class OCRDialog {
      * Adds auto-detected barcodes to the fields table.
      */
     private void addAutoDetectedBarcodes(BarcodeResult result) {
+        saveStateForUndo();
         String prefix = OCRPreferences.getMetadataPrefix();
         int startIndex = fieldEntries.size();
 
@@ -1938,6 +2106,7 @@ public class OCRDialog {
      * Adds a barcode result to the fields table.
      */
     private void addBarcodeResult(BarcodeResult result, int offsetX, int offsetY) {
+        saveStateForUndo();
         String prefix = OCRPreferences.getMetadataPrefix();
         int startIndex = fieldEntries.size();
 
@@ -1975,6 +2144,7 @@ public class OCRDialog {
      * Adds a unified decoder result to the fields table.
      */
     private void addUnifiedResult(UnifiedDecoderService.DecodedResult result, int offsetX, int offsetY) {
+        saveStateForUndo();
         String prefix = OCRPreferences.getMetadataPrefix();
         int startIndex = fieldEntries.size();
 
@@ -2018,6 +2188,7 @@ public class OCRDialog {
     }
 
     private void addRegionResults(OCRResult result, int offsetX, int offsetY, RegionType regionType) {
+        saveStateForUndo();
         String prefix = OCRPreferences.getMetadataPrefix();
         int startIndex = fieldEntries.size();
 
@@ -2110,9 +2281,62 @@ public class OCRDialog {
         }
 
         metadataPreview.setText(sb.toString());
+
+        // Update dirty state by comparing current state to last saved state
+        String currentState = computeFieldsStateHash();
+        if (!currentState.equals(lastSavedState) && !fieldEntries.isEmpty()) {
+            markDirty();
+        }
+    }
+
+    /**
+     * Computes a hash of the current field entries state for dirty tracking.
+     */
+    private String computeFieldsStateHash() {
+        StringBuilder sb = new StringBuilder();
+        for (OCRFieldEntry entry : fieldEntries) {
+            sb.append(entry.getText()).append("|");
+            sb.append(entry.getMetadataKey()).append("|");
+            sb.append(entry.getRegionType()).append("|");
+            BoundingBox bb = entry.getBoundingBox();
+            if (bb != null) {
+                sb.append(bb.getX()).append(",").append(bb.getY()).append(",");
+                sb.append(bb.getWidth()).append(",").append(bb.getHeight());
+            }
+            sb.append(";");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Marks the dialog as having unsaved changes.
+     */
+    private void markDirty() {
+        if (!isDirty) {
+            isDirty = true;
+            // Update title to indicate unsaved changes
+            String currentTitle = stage.getTitle();
+            if (!currentTitle.endsWith("*")) {
+                stage.setTitle(currentTitle + " *");
+            }
+        }
+    }
+
+    /**
+     * Resets the dirty state after saving.
+     */
+    private void resetDirtyState() {
+        isDirty = false;
+        lastSavedState = computeFieldsStateHash();
+        // Remove asterisk from title
+        String currentTitle = stage.getTitle();
+        if (currentTitle.endsWith(" *")) {
+            stage.setTitle(currentTitle.substring(0, currentTitle.length() - 2));
+        }
     }
 
     private void addManualField() {
+        saveStateForUndo();
         String prefix = OCRPreferences.getMetadataPrefix();
         String key = prefix + "field_" + fieldEntries.size();
         OCRFieldEntry entry = new OCRFieldEntry("", key, 1.0f, null);
@@ -2207,6 +2431,9 @@ public class OCRDialog {
             currentTemplate = template;
             useFixedPositionsCheckBox.setDisable(false);
             useFixedPositionsCheckBox.setSelected(true);
+
+            // Reset dirty state after successful save
+            resetDirtyState();
 
             Dialogs.showInfoNotification("Template Saved",
                     String.format("Saved template '%s' with %d field positions.",
@@ -2602,6 +2829,133 @@ public class OCRDialog {
         entry.saveImageData((ImageData<T>) imageData);
     }
 
+    // ========== Undo/Redo Support ==========
+
+    /**
+     * Snapshot of a field entry for undo/redo operations.
+     */
+    private static class FieldSnapshot {
+        final String originalText;
+        final String text;
+        final String metadataKey;
+        final RegionType regionType;
+        final float confidence;
+        final BoundingBox boundingBox;
+        final String barcodeFormat;
+
+        FieldSnapshot(OCRFieldEntry entry) {
+            this.originalText = entry.getOriginalText();
+            this.text = entry.getText();
+            this.metadataKey = entry.getMetadataKey();
+            this.regionType = entry.getRegionType();
+            this.confidence = entry.getConfidence();
+            this.boundingBox = entry.getBoundingBox();
+            this.barcodeFormat = entry.getBarcodeFormat();
+        }
+
+        OCRFieldEntry toEntry() {
+            OCRFieldEntry entry = new OCRFieldEntry(originalText, metadataKey, confidence, boundingBox, regionType);
+            entry.setText(text);
+            if (barcodeFormat != null) {
+                entry.setBarcodeFormat(barcodeFormat);
+            }
+            return entry;
+        }
+    }
+
+    /**
+     * Saves the current state for undo. Call this before making changes.
+     */
+    private void saveStateForUndo() {
+        if (isUndoRedoOperation) return;
+
+        List<FieldSnapshot> snapshot = new ArrayList<>();
+        for (OCRFieldEntry entry : fieldEntries) {
+            snapshot.add(new FieldSnapshot(entry));
+        }
+        undoStack.push(snapshot);
+
+        // Limit undo stack size
+        while (undoStack.size() > MAX_UNDO_LEVELS) {
+            undoStack.removeLast();
+        }
+
+        // Clear redo stack when new action is performed
+        redoStack.clear();
+    }
+
+    /**
+     * Undoes the last change to field entries.
+     */
+    private void undo() {
+        if (undoStack.isEmpty()) {
+            return;
+        }
+
+        // Save current state to redo stack
+        List<FieldSnapshot> currentSnapshot = new ArrayList<>();
+        for (OCRFieldEntry entry : fieldEntries) {
+            currentSnapshot.add(new FieldSnapshot(entry));
+        }
+        redoStack.push(currentSnapshot);
+
+        // Restore previous state
+        isUndoRedoOperation = true;
+        try {
+            List<FieldSnapshot> previousState = undoStack.pop();
+            fieldEntries.clear();
+            for (FieldSnapshot snapshot : previousState) {
+                fieldEntries.add(snapshot.toEntry());
+            }
+            fieldsTable.refresh();
+            updateMetadataPreview();
+            drawBoundingBoxes();
+        } finally {
+            isUndoRedoOperation = false;
+        }
+    }
+
+    /**
+     * Redoes the last undone change.
+     */
+    private void redo() {
+        if (redoStack.isEmpty()) {
+            return;
+        }
+
+        // Save current state to undo stack
+        List<FieldSnapshot> currentSnapshot = new ArrayList<>();
+        for (OCRFieldEntry entry : fieldEntries) {
+            currentSnapshot.add(new FieldSnapshot(entry));
+        }
+        undoStack.push(currentSnapshot);
+
+        // Restore redo state
+        isUndoRedoOperation = true;
+        try {
+            List<FieldSnapshot> redoState = redoStack.pop();
+            fieldEntries.clear();
+            for (FieldSnapshot snapshot : redoState) {
+                fieldEntries.add(snapshot.toEntry());
+            }
+            fieldsTable.refresh();
+            updateMetadataPreview();
+            drawBoundingBoxes();
+        } finally {
+            isUndoRedoOperation = false;
+        }
+    }
+
+    /**
+     * Clears the undo/redo history. Called when switching images.
+     */
+    private void clearUndoHistory() {
+        undoStack.clear();
+        redoStack.clear();
+    }
+
+    // ========== Inner Classes ==========
+
     /**
      * Data class for table entries.
      * Stores both original OCR text and filtered display text.
@@ -2670,7 +3024,8 @@ public class OCRDialog {
                 MetadataKeyValidator.ValidationResult validation =
                         MetadataKeyValidator.validateKey(item);
                 if (!validation.isValid()) {
-                    setStyle("-fx-background-color: #ffcccc;");
+                    // Use red border instead of background for dark mode compatibility
+                    setStyle("-fx-border-color: #cc3333; -fx-border-width: 2px;");
                     setTooltip(new Tooltip(validation.getErrorMessage()));
                 } else {
                     setStyle("");
