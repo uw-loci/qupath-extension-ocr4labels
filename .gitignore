@@ -25,3 +25,4 @@ local.properties
 # Tessdata (user should download separately)
 tessdata/
 *.traineddata
+codemap/
