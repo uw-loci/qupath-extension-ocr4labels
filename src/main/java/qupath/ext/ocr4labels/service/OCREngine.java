@@ -159,7 +159,16 @@ public class OCREngine {
                     detectedOrientation
             );
 
-            logger.info("OCR complete: {} blocks detected in {}ms", textBlocks.size(), processingTime);
+            long lineCount = textBlocks.stream()
+                    .filter(b -> b.getType() == TextBlock.BlockType.LINE).count();
+            long wordCount = textBlocks.stream()
+                    .filter(b -> b.getType() == TextBlock.BlockType.WORD).count();
+            logger.info("OCR complete in {}ms: {} lines, {} words detected",
+                    processingTime, lineCount, wordCount);
+            for (TextBlock tb : textBlocks) {
+                logger.debug("  {} [{}%]: '{}'", tb.getType(),
+                        tb.getConfidencePercent(), tb.getText());
+            }
             return result;
 
         } catch (TesseractException e) {

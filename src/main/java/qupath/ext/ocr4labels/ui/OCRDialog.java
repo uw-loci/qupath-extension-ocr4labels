@@ -1393,15 +1393,16 @@ public class OCRDialog {
                     drawBoundingBoxes();
                     progressIndicator.setVisible(false);
 
+                    long displayCount = result.getDisplayBlockCount();
                     String modeInfo = selectedPSM != null ? selectedPSM.toString() : "Auto";
                     if (foundBarcodes) {
                         Dialogs.showInfoNotification("Auto Scan Complete",
-                                String.format("Found %d barcode(s) + %d text block(s)",
-                                        barcodeCount, result.getBlockCount()));
+                                String.format("Found %d barcode(s) + %d text region(s)",
+                                        barcodeCount, displayCount));
                     } else {
                         Dialogs.showInfoNotification("Scan Complete",
-                                String.format("Detected %d text blocks (Mode: %s)",
-                                        result.getBlockCount(), modeInfo));
+                                String.format("Detected %d text region(s) (Mode: %s)",
+                                        displayCount, modeInfo));
                     }
                 }))
                 .exceptionally(ex -> {
@@ -1423,7 +1424,8 @@ public class OCRDialog {
      */
     private void addOCRResultsWithoutClearing(OCRResult result) {
         String prefix = OCRPreferences.getMetadataPrefix();
-        int index = fieldEntries.size();
+        int startSize = fieldEntries.size();
+        int index = startSize;
 
         for (TextBlock block : result.getTextBlocks()) {
             if (block.getType() == TextBlock.BlockType.LINE && !block.isEmpty()) {
@@ -1441,8 +1443,8 @@ public class OCRDialog {
             }
         }
 
-        // If no lines, use words
-        if (index == fieldEntries.size()) {
+        // If no lines were added, use words as fallback
+        if (index == startSize) {
             for (TextBlock block : result.getTextBlocks()) {
                 if (block.getType() == TextBlock.BlockType.WORD && !block.isEmpty()) {
                     String suggestedKey = prefix + "field_" + index;
@@ -1458,7 +1460,12 @@ public class OCRDialog {
                     index++;
                 }
             }
+            logger.info("No LINE blocks found, used {} WORD blocks as fallback", index - startSize);
         }
+
+        int added = index - startSize;
+        logger.info("Added {} field entries from OCR ({} lines, {} words in raw result)",
+                added, result.getLineCount(), result.getWordCount());
 
         updateMetadataPreview();
     }
@@ -1494,10 +1501,11 @@ public class OCRDialog {
                     drawBoundingBoxes();
                     progressIndicator.setVisible(false);
 
+                    long displayCount = result.getDisplayBlockCount();
                     String modeInfo = selectedPSM != null ? selectedPSM.toString() : "Auto";
                     Dialogs.showInfoNotification("OCR Complete",
-                            String.format("Detected %d text blocks in %dms (Mode: %s)",
-                                    result.getBlockCount(), result.getProcessingTimeMs(), modeInfo));
+                            String.format("Detected %d text region(s) in %dms (Mode: %s)",
+                                    displayCount, result.getProcessingTimeMs(), modeInfo));
                 }))
                 .exceptionally(ex -> {
                     Platform.runLater(() -> {
@@ -1545,7 +1553,6 @@ public class OCRDialog {
         for (TextBlock block : result.getTextBlocks()) {
             if (block.getType() == TextBlock.BlockType.LINE && !block.isEmpty()) {
                 String suggestedKey = findMatchingMetadataKey(block.getBoundingBox(), prefix + "field_" + index);
-                // Store original text, but display filtered version
                 String originalText = block.getText();
                 OCRFieldEntry entry = new OCRFieldEntry(
                         originalText,
@@ -1553,19 +1560,17 @@ public class OCRDialog {
                         block.getConfidence(),
                         block.getBoundingBox()
                 );
-                // Apply active filters to display text
                 entry.setText(applyActiveFilters(originalText));
                 fieldEntries.add(entry);
                 index++;
             }
         }
 
-        // If no lines, use words
+        // If no lines were found, use words as fallback
         if (fieldEntries.isEmpty()) {
             for (TextBlock block : result.getTextBlocks()) {
                 if (block.getType() == TextBlock.BlockType.WORD && !block.isEmpty()) {
                     String suggestedKey = findMatchingMetadataKey(block.getBoundingBox(), prefix + "field_" + index);
-                    // Store original text, but display filtered version
                     String originalText = block.getText();
                     OCRFieldEntry entry = new OCRFieldEntry(
                             originalText,
@@ -1573,13 +1578,16 @@ public class OCRDialog {
                             block.getConfidence(),
                             block.getBoundingBox()
                     );
-                    // Apply active filters to display text
                     entry.setText(applyActiveFilters(originalText));
                     fieldEntries.add(entry);
                     index++;
                 }
             }
+            logger.info("No LINE blocks found, used {} WORD blocks as fallback", index);
         }
+
+        logger.info("Populated {} field entries from OCR ({} lines, {} words in raw result)",
+                fieldEntries.size(), result.getLineCount(), result.getWordCount());
 
         updateMetadataPreview();
     }
@@ -1880,8 +1888,8 @@ public class OCRDialog {
                         } else {
                             addRegionResults(result, offsetX, offsetY, RegionType.TEXT);
                             Dialogs.showInfoNotification("Region Scan Complete",
-                                    String.format("Found %d text blocks in the selected region.",
-                                            result.getBlockCount()));
+                                    String.format("Found %d text region(s) in the selected area.",
+                                            result.getDisplayBlockCount()));
                         }
 
                         resetRegionSelection();

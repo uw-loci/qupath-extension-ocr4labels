@@ -117,10 +117,37 @@ public class OCRResult {
     }
 
     /**
-     * Gets the number of detected text blocks.
+     * Gets the total number of detected text blocks (all types).
      */
     public int getBlockCount() {
         return textBlocks.size();
+    }
+
+    /**
+     * Gets the count of LINE-type blocks.
+     */
+    public long getLineCount() {
+        return textBlocks.stream()
+                .filter(b -> b.getType() == TextBlock.BlockType.LINE && !b.isEmpty())
+                .count();
+    }
+
+    /**
+     * Gets the count of WORD-type blocks.
+     */
+    public long getWordCount() {
+        return textBlocks.stream()
+                .filter(b -> b.getType() == TextBlock.BlockType.WORD && !b.isEmpty())
+                .count();
+    }
+
+    /**
+     * Gets the count of blocks that will actually be displayed.
+     * The dialog shows LINE blocks if any exist, otherwise WORD blocks.
+     */
+    public long getDisplayBlockCount() {
+        long lines = getLineCount();
+        return lines > 0 ? lines : getWordCount();
     }
 
     /**
