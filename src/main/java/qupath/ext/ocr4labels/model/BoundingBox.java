@@ -99,6 +99,13 @@ public class BoundingBox {
     }
 
     /**
+     * Creates a new bounding box shifted by the specified offsets.
+     */
+    public BoundingBox offset(int dx, int dy) {
+        return new BoundingBox(x + dx, y + dy, width, height);
+    }
+
+    /**
      * Creates a new bounding box expanded by the specified margin on all sides.
      */
     public BoundingBox expand(int margin) {

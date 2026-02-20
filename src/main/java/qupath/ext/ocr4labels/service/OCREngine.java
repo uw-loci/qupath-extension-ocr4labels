@@ -126,11 +126,18 @@ public class OCREngine {
             // Inspired by zindy/qupath-extension-ocr region-based OCR support
             // See: https://github.com/zindy/qupath-extension-ocr
             BufferedImage processedImage = image;
+            int autoCropOffsetX = 0;
+            int autoCropOffsetY = 0;
             if (config.hasCropRegion()) {
                 processedImage = cropImage(image, config.getCropRegion());
             } else if (config.isEnablePreprocessing()) {
                 // Auto-crop to label region to remove dark slide borders
-                processedImage = cropToLabelRegion(processedImage);
+                Rectangle labelBounds = detectLabelRegion(processedImage);
+                if (labelBounds != null) {
+                    autoCropOffsetX = labelBounds.x;
+                    autoCropOffsetY = labelBounds.y;
+                    processedImage = cropImage(image, labelBounds);
+                }
             }
             int detectedOrientation = 0;
 
@@ -151,6 +158,19 @@ public class OCREngine {
 
             // Extract text blocks
             List<TextBlock> textBlocks = extractTextBlocks(processedImage, config);
+
+            // Offset bounding boxes to original image coordinates if auto-crop was applied
+            if (autoCropOffsetX != 0 || autoCropOffsetY != 0) {
+                final int dx = autoCropOffsetX;
+                final int dy = autoCropOffsetY;
+                List<TextBlock> offsetBlocks = new ArrayList<>();
+                for (TextBlock tb : textBlocks) {
+                    BoundingBox adjusted = tb.getBoundingBox().offset(dx, dy);
+                    offsetBlocks.add(new TextBlock(tb.getText(), adjusted,
+                            tb.getConfidence(), tb.getType()));
+                }
+                textBlocks = offsetBlocks;
+            }
 
             long processingTime = System.currentTimeMillis() - startTime;
 
@@ -271,16 +291,16 @@ public class OCREngine {
     }
 
     /**
-     * Auto-detects the bright label region in a slide label image and crops to it,
-     * removing the dark slide/scanner border that confuses Tesseract page segmentation.
+     * Detects the bright label region in a slide label image, returning its bounds
+     * so the dark slide/scanner border can be cropped out before OCR.
      *
      * <p>Scans inward from each edge to find where the label begins, defined as
      * rows/columns where a majority of pixels exceed a brightness threshold.</p>
      *
      * @param image The full label image (may include dark borders)
-     * @return The cropped image containing just the label, or the original if no border detected
+     * @return Rectangle of the label region with inward margin, or null if no significant border
      */
-    private BufferedImage cropToLabelRegion(BufferedImage image) {
+    private Rectangle detectLabelRegion(BufferedImage image) {
         int w = image.getWidth();
         int h = image.getHeight();
 
@@ -362,7 +382,7 @@ public class OCREngine {
 
         if (removedFraction < 0.02) {
             logger.debug("Auto-crop: no significant border detected, using full image");
-            return image;
+            return null;
         }
 
         // Add a small margin inside the label to avoid edge artifacts
@@ -378,13 +398,7 @@ public class OCREngine {
         logger.info("Auto-crop: removed dark border, label region ({},{}) {}x{} from {}x{} image",
                 left, top, cropW, cropH, w, h);
 
-        // Create a new image (getSubimage shares the raster, which can cause issues)
-        BufferedImage cropped = new BufferedImage(cropW, cropH, image.getType());
-        Graphics2D g = cropped.createGraphics();
-        g.drawImage(image, 0, 0, cropW, cropH,
-                left, top, left + cropW, top + cropH, null);
-        g.dispose();
-        return cropped;
+        return new Rectangle(left, top, cropW, cropH);
     }
 
     /**
