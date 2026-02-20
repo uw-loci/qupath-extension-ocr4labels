@@ -128,6 +128,9 @@ public class OCREngine {
             BufferedImage processedImage = image;
             if (config.hasCropRegion()) {
                 processedImage = cropImage(image, config.getCropRegion());
+            } else if (config.isEnablePreprocessing()) {
+                // Auto-crop to label region to remove dark slide borders
+                processedImage = cropToLabelRegion(processedImage);
             }
             int detectedOrientation = 0;
 
@@ -265,6 +268,123 @@ public class OCREngine {
 
         logger.debug("Cropping image to region: ({}, {}, {}, {})", x, y, width, height);
         return image.getSubimage(x, y, width, height);
+    }
+
+    /**
+     * Auto-detects the bright label region in a slide label image and crops to it,
+     * removing the dark slide/scanner border that confuses Tesseract page segmentation.
+     *
+     * <p>Scans inward from each edge to find where the label begins, defined as
+     * rows/columns where a majority of pixels exceed a brightness threshold.</p>
+     *
+     * @param image The full label image (may include dark borders)
+     * @return The cropped image containing just the label, or the original if no border detected
+     */
+    private BufferedImage cropToLabelRegion(BufferedImage image) {
+        int w = image.getWidth();
+        int h = image.getHeight();
+
+        // Convert to grayscale values for analysis
+        int[] gray = new int[w * h];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int rgb = image.getRGB(x, y);
+                int r = (rgb >> 16) & 0xFF;
+                int g = (rgb >> 8) & 0xFF;
+                int b = rgb & 0xFF;
+                gray[y * w + x] = (r + g + b) / 3;
+            }
+        }
+
+        // Brightness threshold: pixels above this are considered "label" (not border)
+        int threshold = 80;
+        // A row/column is "label" if this fraction of pixels are bright
+        double labelFraction = 0.40;
+
+        // Scan from top to find first label row
+        int top = 0;
+        for (int y = 0; y < h; y++) {
+            int brightCount = 0;
+            for (int x = 0; x < w; x++) {
+                if (gray[y * w + x] > threshold) brightCount++;
+            }
+            if ((double) brightCount / w >= labelFraction) {
+                top = y;
+                break;
+            }
+        }
+
+        // Scan from bottom
+        int bottom = h - 1;
+        for (int y = h - 1; y >= top; y--) {
+            int brightCount = 0;
+            for (int x = 0; x < w; x++) {
+                if (gray[y * w + x] > threshold) brightCount++;
+            }
+            if ((double) brightCount / w >= labelFraction) {
+                bottom = y;
+                break;
+            }
+        }
+
+        // Scan from left
+        int left = 0;
+        for (int x = 0; x < w; x++) {
+            int brightCount = 0;
+            for (int y = top; y <= bottom; y++) {
+                if (gray[y * w + x] > threshold) brightCount++;
+            }
+            int colHeight = bottom - top + 1;
+            if ((double) brightCount / colHeight >= labelFraction) {
+                left = x;
+                break;
+            }
+        }
+
+        // Scan from right
+        int right = w - 1;
+        for (int x = w - 1; x >= left; x--) {
+            int brightCount = 0;
+            for (int y = top; y <= bottom; y++) {
+                if (gray[y * w + x] > threshold) brightCount++;
+            }
+            int colHeight = bottom - top + 1;
+            if ((double) brightCount / colHeight >= labelFraction) {
+                right = x;
+                break;
+            }
+        }
+
+        // Check if we actually found a meaningful crop (border must be at least 2% of image)
+        int cropW = right - left + 1;
+        int cropH = bottom - top + 1;
+        double removedFraction = 1.0 - ((double)(cropW * cropH) / (w * h));
+
+        if (removedFraction < 0.02) {
+            logger.debug("Auto-crop: no significant border detected, using full image");
+            return image;
+        }
+
+        // Add a small margin inside the label to avoid edge artifacts
+        int margin = Math.max(2, Math.min(cropW, cropH) / 100);
+        left = Math.min(left + margin, right);
+        top = Math.min(top + margin, bottom);
+        right = Math.max(right - margin, left);
+        bottom = Math.max(bottom - margin, top);
+
+        cropW = right - left + 1;
+        cropH = bottom - top + 1;
+
+        logger.info("Auto-crop: removed dark border, label region ({},{}) {}x{} from {}x{} image",
+                left, top, cropW, cropH, w, h);
+
+        // Create a new image (getSubimage shares the raster, which can cause issues)
+        BufferedImage cropped = new BufferedImage(cropW, cropH, image.getType());
+        Graphics2D g = cropped.createGraphics();
+        g.drawImage(image, 0, 0, cropW, cropH,
+                left, top, left + cropW, top + cropH, null);
+        g.dispose();
+        return cropped;
     }
 
     /**
