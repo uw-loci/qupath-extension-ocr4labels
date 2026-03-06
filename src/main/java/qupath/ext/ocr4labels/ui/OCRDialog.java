@@ -18,7 +18,8 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
-import javafx.scene.effect.ColorAdjust;
+import javafx.scene.image.WritableImage;
+import javafx.scene.image.PixelWriter;
 import javafx.scene.paint.Color;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
@@ -132,8 +133,9 @@ public class OCRDialog {
     private boolean isDirty = false;
     private String lastSavedState = "";
 
-    // Brightness/contrast adjustment for label preview
-    private ColorAdjust colorAdjust;
+    // Display range adjustment for label preview (does not affect OCR)
+    private Slider displayMinSlider;
+    private Slider displayMaxSlider;
 
     // Undo/Redo support
     private static final int MAX_UNDO_LEVELS = 50;
@@ -599,8 +601,7 @@ public class OCRDialog {
      */
     private void updateImageDisplay() {
         if (labelImage != null) {
-            Image fxImage = SwingFXUtils.toFXImage(labelImage, null);
-            imageView.setImage(fxImage);
+            updateDisplayImage();
             imageView.setVisible(true);
             overlayCanvas.setVisible(true);
             noLabelLabel.setVisible(false);
@@ -612,6 +613,113 @@ public class OCRDialog {
         } else {
             showNoLabelPlaceholder();
         }
+    }
+
+    /**
+     * Updates the displayed image with the current min/max display range.
+     * Does NOT modify the original labelImage used for OCR.
+     */
+    private void updateDisplayImage() {
+        if (labelImage == null) return;
+
+        int min = (int) displayMinSlider.getValue();
+        int max = (int) displayMaxSlider.getValue();
+
+        // Avoid division by zero
+        if (max <= min) max = min + 1;
+
+        int w = labelImage.getWidth();
+        int h = labelImage.getHeight();
+
+        // If range is full (0-255), just show the original
+        if (min == 0 && max >= 255) {
+            imageView.setImage(SwingFXUtils.toFXImage(labelImage, null));
+            return;
+        }
+
+        // Build lookup table for speed
+        int[] lut = new int[256];
+        double scale = 255.0 / (max - min);
+        for (int i = 0; i < 256; i++) {
+            int val = (int) ((i - min) * scale);
+            lut[i] = Math.max(0, Math.min(255, val));
+        }
+
+        // Apply lookup table to create display image
+        WritableImage displayImage = new WritableImage(w, h);
+        PixelWriter pw = displayImage.getPixelWriter();
+
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int rgb = labelImage.getRGB(x, y);
+                int r = lut[(rgb >> 16) & 0xFF];
+                int g = lut[(rgb >> 8) & 0xFF];
+                int b = lut[rgb & 0xFF];
+                int a = (rgb >> 24) & 0xFF;
+                pw.setArgb(x, y, (a << 24) | (r << 16) | (g << 8) | b);
+            }
+        }
+
+        imageView.setImage(displayImage);
+    }
+
+    /**
+     * Auto-adjusts the display range based on image histogram.
+     * Sets min/max to the 2nd and 98th percentile of pixel values.
+     */
+    private void autoAdjustDisplayRange() {
+        if (labelImage == null) return;
+
+        int w = labelImage.getWidth();
+        int h = labelImage.getHeight();
+        int totalPixels = w * h;
+
+        // Build histogram from grayscale values
+        int[] histogram = new int[256];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int rgb = labelImage.getRGB(x, y);
+                int r = (rgb >> 16) & 0xFF;
+                int g = (rgb >> 8) & 0xFF;
+                int b = rgb & 0xFF;
+                int gray = (r + g + b) / 3;
+                histogram[gray]++;
+            }
+        }
+
+        // Find 2nd and 98th percentile
+        int lowTarget = (int) (totalPixels * 0.02);
+        int highTarget = (int) (totalPixels * 0.98);
+
+        int cumulative = 0;
+        int minVal = 0;
+        for (int i = 0; i < 256; i++) {
+            cumulative += histogram[i];
+            if (cumulative >= lowTarget) {
+                minVal = i;
+                break;
+            }
+        }
+
+        cumulative = 0;
+        int maxVal = 255;
+        for (int i = 0; i < 256; i++) {
+            cumulative += histogram[i];
+            if (cumulative >= highTarget) {
+                maxVal = i;
+                break;
+            }
+        }
+
+        // Ensure at least some range
+        if (maxVal - minVal < 10) {
+            minVal = Math.max(0, minVal - 5);
+            maxVal = Math.min(255, maxVal + 5);
+        }
+
+        logger.info("Auto display range: {}-{}", minVal, maxVal);
+        displayMinSlider.setValue(minVal);
+        displayMaxSlider.setValue(maxVal);
     }
 
     /**
@@ -665,10 +773,6 @@ public class OCRDialog {
 
         imageView = new ImageView();
         imageView.setPreserveRatio(true);
-
-        // Apply brightness/contrast adjustment effect
-        colorAdjust = new ColorAdjust();
-        imageView.setEffect(colorAdjust);
 
         // Placeholder for no label
         noLabelLabel = new Label("No Label Found\n\nSelect an image from the list,\nor this image has no label.");
@@ -790,46 +894,62 @@ public class OCRDialog {
         controlsRow.setAlignment(Pos.CENTER_LEFT);
         controlsRow.getChildren().addAll(zoomControls, legendBox);
 
-        // Brightness/contrast controls for label preview
+        // Display range controls for label preview (min/max windowing)
         HBox bcControls = new HBox(8);
         bcControls.setAlignment(Pos.CENTER_LEFT);
 
-        Label brightnessLabel = new Label("Brightness:");
-        brightnessLabel.setStyle("-fx-font-size: 11px;");
-        Slider brightnessSlider = new Slider(-1.0, 1.0, 0.0);
-        brightnessSlider.setPrefWidth(100);
-        brightnessSlider.setShowTickMarks(true);
-        brightnessSlider.setMajorTickUnit(0.5);
-        brightnessSlider.setTooltip(new Tooltip(
-                "Adjust preview brightness.\n" +
+        Label minLabel = new Label("Min:");
+        minLabel.setStyle("-fx-font-size: 11px;");
+        displayMinSlider = new Slider(0, 255, 0);
+        displayMinSlider.setPrefWidth(90);
+        displayMinSlider.setTooltip(new Tooltip(
+                "Set the minimum display value (black point).\n" +
+                "Pixels at or below this become black.\n" +
                 "Does not affect OCR processing."));
-        brightnessSlider.valueProperty().addListener((obs, old, val) ->
-                colorAdjust.setBrightness(val.doubleValue()));
 
-        Label contrastLabel = new Label("Contrast:");
-        contrastLabel.setStyle("-fx-font-size: 11px;");
-        Slider contrastSlider = new Slider(-1.0, 1.0, 0.0);
-        contrastSlider.setPrefWidth(100);
-        contrastSlider.setShowTickMarks(true);
-        contrastSlider.setMajorTickUnit(0.5);
-        contrastSlider.setTooltip(new Tooltip(
-                "Adjust preview contrast.\n" +
+        Label maxLabel = new Label("Max:");
+        maxLabel.setStyle("-fx-font-size: 11px;");
+        displayMaxSlider = new Slider(0, 255, 255);
+        displayMaxSlider.setPrefWidth(90);
+        displayMaxSlider.setTooltip(new Tooltip(
+                "Set the maximum display value (white point).\n" +
+                "Pixels at or above this become white.\n" +
                 "Does not affect OCR processing."));
-        contrastSlider.valueProperty().addListener((obs, old, val) ->
-                colorAdjust.setContrast(val.doubleValue()));
+
+        Label rangeValueLabel = new Label("0-255");
+        rangeValueLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: gray;");
+
+        // Update display when sliders change
+        displayMinSlider.valueProperty().addListener((obs, old, val) -> {
+            rangeValueLabel.setText(String.format("%.0f-%.0f",
+                    displayMinSlider.getValue(), displayMaxSlider.getValue()));
+            updateDisplayImage();
+        });
+        displayMaxSlider.valueProperty().addListener((obs, old, val) -> {
+            rangeValueLabel.setText(String.format("%.0f-%.0f",
+                    displayMinSlider.getValue(), displayMaxSlider.getValue()));
+            updateDisplayImage();
+        });
+
+        Button autoButton = new Button("Auto");
+        autoButton.setStyle("-fx-font-size: 10px;");
+        autoButton.setTooltip(new Tooltip(
+                "Auto-adjust display range based on image content.\n" +
+                "Sets min/max to the 2nd and 98th percentile of pixel values."));
+        autoButton.setOnAction(e -> autoAdjustDisplayRange());
 
         Button resetBCButton = new Button("Reset");
         resetBCButton.setStyle("-fx-font-size: 10px;");
-        resetBCButton.setTooltip(new Tooltip("Reset brightness and contrast to defaults"));
+        resetBCButton.setTooltip(new Tooltip("Reset display range to full (0-255)"));
         resetBCButton.setOnAction(e -> {
-            brightnessSlider.setValue(0);
-            contrastSlider.setValue(0);
+            displayMinSlider.setValue(0);
+            displayMaxSlider.setValue(255);
         });
 
         bcControls.getChildren().addAll(
-                brightnessLabel, brightnessSlider,
-                contrastLabel, contrastSlider,
-                resetBCButton);
+                minLabel, displayMinSlider,
+                maxLabel, displayMaxSlider,
+                rangeValueLabel, autoButton, resetBCButton);
 
         panel.getChildren().addAll(titleLabel, imageScrollPane, controlsRow, bcControls);
         return panel;
@@ -2590,25 +2710,25 @@ public class OCRDialog {
         int imgWidth = labelImage.getWidth();
         int imgHeight = labelImage.getHeight();
         double dilation = currentTemplate.getDilationFactor();
+        boolean invert = invertCheckBox.isSelected();
+        boolean enhance = thresholdCheckBox.isSelected();
 
         // Build OCR config - used for TEXT and AUTO modes
         OCRConfiguration config = OCRConfiguration.builder()
                 .pageSegMode(OCRConfiguration.PageSegMode.SINGLE_BLOCK)
                 .language(OCRPreferences.getLanguage())
                 .minConfidence(0.1) // Very low threshold for fixed positions
-                .enhanceContrast(thresholdCheckBox.isSelected())
+                .enhanceContrast(enhance)
                 .build();
 
-        // Process each field mapping using unified decoder
-        java.util.List<java.util.concurrent.CompletableFuture<Void>> futures = new ArrayList<>();
-
+        // Collect region extraction data on the FX thread before going async
+        List<TemplateRegionTask> tasks = new ArrayList<>();
         for (OCRTemplate.FieldMapping mapping : currentTemplate.getFieldMappings()) {
             if (!mapping.isEnabled() || !mapping.hasBoundingBox()) continue;
 
             int[] box = mapping.getScaledBoundingBox(imgWidth, imgHeight, dilation);
             if (box == null || box[2] < 5 || box[3] < 5) continue;
 
-            // Extract region
             BufferedImage regionImage;
             try {
                 regionImage = labelImage.getSubimage(box[0], box[1], box[2], box[3]);
@@ -2617,89 +2737,117 @@ public class OCRDialog {
                 continue;
             }
 
-            // Apply inversion if needed
-            if (invertCheckBox.isSelected()) {
+            if (invert) {
                 regionImage = invertImage(regionImage);
             }
 
-            final BufferedImage finalRegion = regionImage;
-            final String metadataKey = mapping.getMetadataKey();
-            final int[] finalBox = box;
-            final RegionType regionType = mapping.getRegionType();
-
-            java.awt.Rectangle region = new java.awt.Rectangle(0, 0, box[2], box[3]);
-
-            java.util.concurrent.CompletableFuture<Void> future = OCRController.getInstance()
-                    .decodeRegionAsync(finalRegion, region, regionType, config)
-                    .thenAccept(result -> {
-                        Platform.runLater(() -> {
-                            BoundingBox bbox = new BoundingBox(finalBox[0], finalBox[1], finalBox[2], finalBox[3]);
-                            OCRFieldEntry entry = new OCRFieldEntry(
-                                    result.getText(),
-                                    metadataKey,
-                                    result.getConfidence(),
-                                    bbox,
-                                    result.getSourceType() != null ? result.getSourceType() : regionType
-                            );
-
-                            // Set barcode format if applicable
-                            if (result.getSourceType() == RegionType.BARCODE && result.getFormat() != null) {
-                                entry.setBarcodeFormat(result.getFormat());
-                            }
-
-                            fieldEntries.add(entry);
-                        });
-                    });
-
-            futures.add(future);
+            tasks.add(new TemplateRegionTask(regionImage, mapping.getMetadataKey(),
+                    box, mapping.getRegionType()));
         }
 
-        // Wait for all extractions to complete
-        java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
-                .thenRun(() -> Platform.runLater(() -> {
-                    progressIndicator.setVisible(false);
-                    // Sort by metadata key
-                    fieldEntries.sort((a, b) -> {
-                        String keyA = a.getMetadataKey().replaceAll("\\D+", "");
-                        String keyB = b.getMetadataKey().replaceAll("\\D+", "");
-                        try {
-                            return Integer.compare(
-                                    keyA.isEmpty() ? 0 : Integer.parseInt(keyA),
-                                    keyB.isEmpty() ? 0 : Integer.parseInt(keyB)
-                            );
-                        } catch (NumberFormatException e) {
-                            return a.getMetadataKey().compareTo(b.getMetadataKey());
-                        }
-                    });
-                    // Apply active filters to text fields only
-                    for (OCRFieldEntry entry : fieldEntries) {
-                        if (entry.getRegionType() == RegionType.TEXT) {
-                            entry.setText(applyActiveFilters(entry.getOriginalText()));
-                        }
-                    }
-                    drawBoundingBoxes();
+        // Process all regions SEQUENTIALLY on a single background thread.
+        // Tesseract is NOT thread-safe - concurrent calls crash the JVM.
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            List<OCRFieldEntry> results = new ArrayList<>();
 
-                    // Count by type for notification
-                    long textCount = fieldEntries.stream()
-                            .filter(e -> e.getRegionType() == RegionType.TEXT)
-                            .count();
-                    long barcodeCount = fieldEntries.stream()
-                            .filter(e -> e.getRegionType() == RegionType.BARCODE)
-                            .count();
+            for (TemplateRegionTask task : tasks) {
+                try {
+                    java.awt.Rectangle region = new java.awt.Rectangle(
+                            0, 0, task.box[2], task.box[3]);
 
-                    String message = String.format("Extracted from %d positions", fieldEntries.size());
-                    if (textCount > 0 && barcodeCount > 0) {
-                        message += String.format(" (%d text, %d barcode)", textCount, barcodeCount);
+                    UnifiedDecoderService.DecodedResult result =
+                            OCRController.getInstance().decodeRegion(
+                                    task.regionImage, region, task.regionType, config);
+
+                    BoundingBox bbox = new BoundingBox(
+                            task.box[0], task.box[1], task.box[2], task.box[3]);
+
+                    OCRFieldEntry entry = new OCRFieldEntry(
+                            result.getText(),
+                            task.metadataKey,
+                            result.getConfidence(),
+                            bbox,
+                            result.getSourceType() != null ? result.getSourceType() : task.regionType
+                    );
+
+                    if (result.getSourceType() == RegionType.BARCODE && result.getFormat() != null) {
+                        entry.setBarcodeFormat(result.getFormat());
                     }
-                    Dialogs.showInfoNotification("Template Applied", message);
-                }))
-                .exceptionally(ex -> {
-                    Platform.runLater(() -> {
-                        progressIndicator.setVisible(false);
-                        Dialogs.showErrorMessage("Template Apply Failed", ex.getMessage());
-                    });
-                    return null;
+
+                    results.add(entry);
+                } catch (Exception e) {
+                    logger.warn("Failed to decode template field '{}': {}",
+                            task.metadataKey, e.getMessage());
+                }
+            }
+
+            // Update UI on FX thread after all regions are processed
+            Platform.runLater(() -> {
+                fieldEntries.addAll(results);
+
+                // Sort by metadata key
+                fieldEntries.sort((a, b) -> {
+                    String keyA = a.getMetadataKey().replaceAll("\\D+", "");
+                    String keyB = b.getMetadataKey().replaceAll("\\D+", "");
+                    try {
+                        return Integer.compare(
+                                keyA.isEmpty() ? 0 : Integer.parseInt(keyA),
+                                keyB.isEmpty() ? 0 : Integer.parseInt(keyB)
+                        );
+                    } catch (NumberFormatException e) {
+                        return a.getMetadataKey().compareTo(b.getMetadataKey());
+                    }
                 });
+
+                // Apply active filters to text fields only
+                for (OCRFieldEntry entry : fieldEntries) {
+                    if (entry.getRegionType() == RegionType.TEXT) {
+                        entry.setText(applyActiveFilters(entry.getOriginalText()));
+                    }
+                }
+
+                drawBoundingBoxes();
+                updateMetadataPreview();
+                progressIndicator.setVisible(false);
+
+                long textCount = fieldEntries.stream()
+                        .filter(e -> e.getRegionType() == RegionType.TEXT).count();
+                long barcodeCount = fieldEntries.stream()
+                        .filter(e -> e.getRegionType() == RegionType.BARCODE).count();
+
+                String message = String.format("Extracted from %d positions", fieldEntries.size());
+                if (textCount > 0 && barcodeCount > 0) {
+                    message += String.format(" (%d text, %d barcode)", textCount, barcodeCount);
+                }
+                Dialogs.showInfoNotification("Template Applied", message);
+            });
+        }).exceptionally(ex -> {
+            Platform.runLater(() -> {
+                progressIndicator.setVisible(false);
+                logger.error("Template apply failed", ex);
+                Dialogs.showErrorMessage("Template Apply Failed",
+                        "Error processing template: " + ex.getMessage());
+            });
+            return null;
+        });
+    }
+
+    /**
+     * Holds pre-extracted data for a single template region to be decoded on a background thread.
+     */
+    private static class TemplateRegionTask {
+        final BufferedImage regionImage;
+        final String metadataKey;
+        final int[] box;
+        final RegionType regionType;
+
+        TemplateRegionTask(BufferedImage regionImage, String metadataKey,
+                           int[] box, RegionType regionType) {
+            this.regionImage = regionImage;
+            this.metadataKey = metadataKey;
+            this.box = box;
+            this.regionType = regionType;
+        }
     }
 
     private void applyMetadata() {
