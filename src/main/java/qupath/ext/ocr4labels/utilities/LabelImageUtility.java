@@ -7,6 +7,7 @@ import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 
 import java.awt.image.BufferedImage;
+import java.awt.image.WritableRaster;
 import java.util.Arrays;
 import java.util.Collection;
 
@@ -117,7 +118,7 @@ public class LabelImageUtility {
                         logger.info("Found label image by keyword '{}': {}", keyword, imageName);
                         BufferedImage img = retrieveImageByName(server, imageName);
                         if (img != null) {
-                            return img;
+                            return normalizeToEightBit(img);
                         }
                     }
                 }
@@ -223,5 +224,92 @@ public class LabelImageUtility {
             logger.error("Error getting associated image names", e);
             return java.util.Collections.emptyList();
         }
+    }
+
+    /**
+     * Normalizes a BufferedImage to 8-bit RGB with full dynamic range.
+     * Handles 16-bit images (common in CZI label images) and images with
+     * unusual color models where getRGB() loses dynamic range.
+     *
+     * @param image The image to normalize
+     * @return A normalized 8-bit TYPE_INT_RGB image, or the original if already 8-bit standard
+     */
+    public static BufferedImage normalizeToEightBit(BufferedImage image) {
+        if (image == null) return null;
+
+        int bitsPerSample = image.getSampleModel().getSampleSize(0);
+        int numBands = image.getRaster().getNumBands();
+        int w = image.getWidth();
+        int h = image.getHeight();
+        WritableRaster raster = image.getRaster();
+
+        // For standard 8-bit images, check if getRGB conversion loses range
+        if (bitsPerSample <= 8 && image.getType() != BufferedImage.TYPE_CUSTOM) {
+            // Check if the image has reasonable contrast via getRGB
+            int sampleMin = 255, sampleMax = 0;
+            int step = Math.max(1, (w * h) / 10000); // Sample ~10000 pixels
+            for (int i = 0; i < w * h; i += step) {
+                int x = i % w;
+                int y = i / w;
+                int rgb = image.getRGB(x, y);
+                int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
+                sampleMin = Math.min(sampleMin, gray);
+                sampleMax = Math.max(sampleMax, gray);
+            }
+            // If range spans at least 50 levels, image is fine
+            if (sampleMax - sampleMin >= 50) {
+                return image;
+            }
+            logger.info("8-bit image has narrow getRGB range ({}-{}), normalizing from raster",
+                    sampleMin, sampleMax);
+        } else if (bitsPerSample > 8) {
+            logger.info("Normalizing {}-bit image ({}x{}, {} bands) to 8-bit",
+                    bitsPerSample, w, h, numBands);
+        }
+
+        // Find actual min/max from raw raster data
+        int globalMin = Integer.MAX_VALUE;
+        int globalMax = Integer.MIN_VALUE;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                for (int b = 0; b < numBands; b++) {
+                    int val = raster.getSample(x, y, b);
+                    if (val < globalMin) globalMin = val;
+                    if (val > globalMax) globalMax = val;
+                }
+            }
+        }
+
+        logger.info("Raster value range: {}-{} (normalizing to 0-255)", globalMin, globalMax);
+
+        double scale = (globalMax > globalMin) ? 255.0 / (globalMax - globalMin) : 1.0;
+
+        BufferedImage normalized = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+
+        if (numBands == 1) {
+            // Grayscale
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int val = (int) ((raster.getSample(x, y, 0) - globalMin) * scale);
+                    val = Math.max(0, Math.min(255, val));
+                    normalized.setRGB(x, y, (0xFF << 24) | (val << 16) | (val << 8) | val);
+                }
+            }
+        } else {
+            // Multi-band (RGB, RGBA, etc.)
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int r = (int) ((raster.getSample(x, y, 0) - globalMin) * scale);
+                    int g = (int) ((raster.getSample(x, y, Math.min(1, numBands - 1)) - globalMin) * scale);
+                    int b = (int) ((raster.getSample(x, y, Math.min(2, numBands - 1)) - globalMin) * scale);
+                    r = Math.max(0, Math.min(255, r));
+                    g = Math.max(0, Math.min(255, g));
+                    b = Math.max(0, Math.min(255, b));
+                    normalized.setRGB(x, y, (0xFF << 24) | (r << 16) | (g << 8) | b);
+                }
+            }
+        }
+
+        return normalized;
     }
 }
