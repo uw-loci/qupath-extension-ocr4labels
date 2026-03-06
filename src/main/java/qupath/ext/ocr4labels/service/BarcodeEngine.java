@@ -61,8 +61,9 @@ public class BarcodeEngine {
         // Try harder to find barcodes (slower but more accurate)
         hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
 
-        // Enable pure barcode mode (assumes barcode fills most of the image)
-        hints.put(DecodeHintType.PURE_BARCODE, Boolean.FALSE);
+        // Do NOT add PURE_BARCODE hint. ZXing checks containsKey(), not the value,
+        // so even Boolean.FALSE enables pure barcode mode, which requires the barcode
+        // to fill most of the image and fails on label images with surrounding text.
 
         return hints;
     }
@@ -180,16 +181,6 @@ public class BarcodeEngine {
         logger.info("decodeWithRetry: image {}x{} type={} bits={}",
                 image.getWidth(), image.getHeight(), image.getType(),
                 image.getSampleModel().getSampleSize(0));
-
-        // Create a standalone deep copy. BufferedImage.getSubimage() returns a
-        // raster view sharing the parent's data buffer, which can cause ZXing's
-        // BufferedImageLuminanceSource to read incorrect pixel data.
-        BufferedImage standalone = new BufferedImage(
-                image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
-        Graphics2D g2d = standalone.createGraphics();
-        g2d.drawImage(image, 0, 0, null);
-        g2d.dispose();
-        image = standalone;
 
         long startTime = System.currentTimeMillis();
 
