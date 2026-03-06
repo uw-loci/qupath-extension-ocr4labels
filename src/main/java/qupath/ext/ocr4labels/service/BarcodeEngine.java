@@ -12,7 +12,6 @@ import qupath.ext.ocr4labels.model.BoundingBox;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -182,8 +181,15 @@ public class BarcodeEngine {
                 image.getWidth(), image.getHeight(), image.getType(),
                 image.getSampleModel().getSampleSize(0));
 
-        // Diagnostic: save input image for debugging barcode failures
-        saveDiagnosticImage(image, "barcode_input");
+        // Create a standalone deep copy. BufferedImage.getSubimage() returns a
+        // raster view sharing the parent's data buffer, which can cause ZXing's
+        // BufferedImageLuminanceSource to read incorrect pixel data.
+        BufferedImage standalone = new BufferedImage(
+                image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = standalone.createGraphics();
+        g2d.drawImage(image, 0, 0, null);
+        g2d.dispose();
+        image = standalone;
 
         long startTime = System.currentTimeMillis();
 
@@ -435,43 +441,4 @@ public class BarcodeEngine {
         return result;
     }
 
-    /**
-     * Saves a diagnostic copy of the image for debugging barcode detection failures.
-     * Writes to the user's home directory as barcode_debug_[name].png.
-     * This is temporary diagnostic code - remove once barcode detection is stable.
-     */
-    private void saveDiagnosticImage(BufferedImage image, String name) {
-        try {
-            // Create a deep copy (standalone image, not a subimage view)
-            BufferedImage copy = new BufferedImage(image.getWidth(), image.getHeight(),
-                    BufferedImage.TYPE_INT_RGB);
-            Graphics2D g = copy.createGraphics();
-            g.drawImage(image, 0, 0, null);
-            g.dispose();
-
-            File outFile = new File(System.getProperty("user.home"),
-                    "barcode_debug_" + name + ".png");
-            javax.imageio.ImageIO.write(copy, "png", outFile);
-            logger.info("Saved diagnostic image: {} ({}x{})", outFile.getAbsolutePath(),
-                    copy.getWidth(), copy.getHeight());
-
-            // Log pixel value statistics
-            int min = 255, max = 0;
-            long sum = 0;
-            int w = copy.getWidth(), h = copy.getHeight();
-            for (int y = 0; y < h; y++) {
-                for (int x = 0; x < w; x++) {
-                    int rgb = copy.getRGB(x, y);
-                    int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
-                    min = Math.min(min, gray);
-                    max = Math.max(max, gray);
-                    sum += gray;
-                }
-            }
-            long avg = sum / (w * h);
-            logger.info("Diagnostic image stats: min={} max={} avg={}", min, max, avg);
-        } catch (Exception e) {
-            logger.debug("Failed to save diagnostic image: {}", e.getMessage());
-        }
-    }
 }
