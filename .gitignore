@@ -26,3 +26,6 @@ local.properties
 tessdata/
 *.traineddata
 codemap/
+
+# Claude Code session scope
+CLAUDE.md

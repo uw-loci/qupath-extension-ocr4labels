@@ -18,6 +18,7 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
+import javafx.scene.effect.ColorAdjust;
 import javafx.scene.paint.Color;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
@@ -130,6 +131,9 @@ public class OCRDialog {
     // Dirty state tracking - prompt to save template before closing
     private boolean isDirty = false;
     private String lastSavedState = "";
+
+    // Brightness/contrast adjustment for label preview
+    private ColorAdjust colorAdjust;
 
     // Undo/Redo support
     private static final int MAX_UNDO_LEVELS = 50;
@@ -662,6 +666,10 @@ public class OCRDialog {
         imageView = new ImageView();
         imageView.setPreserveRatio(true);
 
+        // Apply brightness/contrast adjustment effect
+        colorAdjust = new ColorAdjust();
+        imageView.setEffect(colorAdjust);
+
         // Placeholder for no label
         noLabelLabel = new Label("No Label Found\n\nSelect an image from the list,\nor this image has no label.");
         noLabelLabel.setStyle("-fx-font-size: 14px; -fx-text-fill: gray; -fx-text-alignment: center;");
@@ -782,7 +790,48 @@ public class OCRDialog {
         controlsRow.setAlignment(Pos.CENTER_LEFT);
         controlsRow.getChildren().addAll(zoomControls, legendBox);
 
-        panel.getChildren().addAll(titleLabel, imageScrollPane, controlsRow);
+        // Brightness/contrast controls for label preview
+        HBox bcControls = new HBox(8);
+        bcControls.setAlignment(Pos.CENTER_LEFT);
+
+        Label brightnessLabel = new Label("Brightness:");
+        brightnessLabel.setStyle("-fx-font-size: 11px;");
+        Slider brightnessSlider = new Slider(-1.0, 1.0, 0.0);
+        brightnessSlider.setPrefWidth(100);
+        brightnessSlider.setShowTickMarks(true);
+        brightnessSlider.setMajorTickUnit(0.5);
+        brightnessSlider.setTooltip(new Tooltip(
+                "Adjust preview brightness.\n" +
+                "Does not affect OCR processing."));
+        brightnessSlider.valueProperty().addListener((obs, old, val) ->
+                colorAdjust.setBrightness(val.doubleValue()));
+
+        Label contrastLabel = new Label("Contrast:");
+        contrastLabel.setStyle("-fx-font-size: 11px;");
+        Slider contrastSlider = new Slider(-1.0, 1.0, 0.0);
+        contrastSlider.setPrefWidth(100);
+        contrastSlider.setShowTickMarks(true);
+        contrastSlider.setMajorTickUnit(0.5);
+        contrastSlider.setTooltip(new Tooltip(
+                "Adjust preview contrast.\n" +
+                "Does not affect OCR processing."));
+        contrastSlider.valueProperty().addListener((obs, old, val) ->
+                colorAdjust.setContrast(val.doubleValue()));
+
+        Button resetBCButton = new Button("Reset");
+        resetBCButton.setStyle("-fx-font-size: 10px;");
+        resetBCButton.setTooltip(new Tooltip("Reset brightness and contrast to defaults"));
+        resetBCButton.setOnAction(e -> {
+            brightnessSlider.setValue(0);
+            contrastSlider.setValue(0);
+        });
+
+        bcControls.getChildren().addAll(
+                brightnessLabel, brightnessSlider,
+                contrastLabel, contrastSlider,
+                resetBCButton);
+
+        panel.getChildren().addAll(titleLabel, imageScrollPane, controlsRow, bcControls);
         return panel;
     }
 
@@ -2198,7 +2247,8 @@ public class OCRDialog {
     private void addRegionResults(OCRResult result, int offsetX, int offsetY, RegionType regionType) {
         saveStateForUndo();
         String prefix = OCRPreferences.getMetadataPrefix();
-        int startIndex = fieldEntries.size();
+        int startSize = fieldEntries.size();
+        int startIndex = startSize;
 
         for (TextBlock block : result.getTextBlocks()) {
             if (block.getType() == TextBlock.BlockType.LINE && !block.isEmpty()) {
@@ -2231,8 +2281,8 @@ public class OCRDialog {
             }
         }
 
-        // If no lines, try words
-        if (startIndex == fieldEntries.size()) {
+        // If no lines were added, try words as fallback
+        if (fieldEntries.size() == startSize) {
             for (TextBlock block : result.getTextBlocks()) {
                 if (block.getType() == TextBlock.BlockType.WORD && !block.isEmpty()) {
                     String suggestedKey = prefix + "region_" + startIndex;
@@ -2692,8 +2742,12 @@ public class OCRDialog {
         int count = OCRMetadataManager.setMetadataBatch(selectedEntry, metadata, project);
 
         if (count > 0) {
-            // Add workflow step if this is the currently open image
-            addWorkflowStep(fieldMappings);
+            // Add workflow step - non-critical, should never crash the application
+            try {
+                addWorkflowStep(fieldMappings);
+            } catch (Throwable t) {
+                logger.error("Failed to add workflow step (metadata was still saved): {}", t.getMessage(), t);
+            }
 
             Dialogs.showInfoNotification("Metadata Applied",
                     String.format("Applied %d metadata fields to: %s", count, selectedEntry.getImageName()));
@@ -2706,42 +2760,36 @@ public class OCRDialog {
     }
 
     private void addWorkflowStep(Map<Integer, String> fieldMappings) {
-        // Get ImageData for the selected entry to add workflow step
-        ImageData<?> imageData = null;
-
-        // First check if selected entry is the currently open image
+        // Only add workflow step to the currently open image.
+        // Avoid readImageData() for non-current images as it is expensive
+        // (opens image servers for large WSI files) and can cause errors.
         ImageData<?> currentImageData = qupath.getImageData();
-        if (currentImageData != null && selectedEntry != null) {
-            try {
-                var currentServer = currentImageData.getServer();
-                if (currentServer != null) {
-                    var currentUris = currentServer.getURIs();
-                    var entryUris = selectedEntry.getURIs();
-                    String currentUri = currentUris.isEmpty() ? null : currentUris.iterator().next().toString();
-                    String entryUri = entryUris.isEmpty() ? null : entryUris.iterator().next().toString();
-
-                    if (currentUri != null && currentUri.equals(entryUri)) {
-                        // Use the already-open ImageData
-                        imageData = currentImageData;
-                    }
-                }
-            } catch (Exception e) {
-                logger.debug("Error comparing URIs: {}", e.getMessage());
-            }
+        if (currentImageData == null || selectedEntry == null) {
+            logger.debug("No current ImageData available for workflow step");
+            return;
         }
 
-        // If not the current image, load ImageData from the entry
-        if (imageData == null && selectedEntry != null) {
-            try {
-                imageData = selectedEntry.readImageData();
-            } catch (Exception e) {
-                logger.warn("Could not read ImageData for workflow step: {}", e.getMessage());
-                return;
+        // Check if selected entry matches the currently open image
+        ImageData<?> imageData = null;
+        try {
+            var currentServer = currentImageData.getServer();
+            if (currentServer != null) {
+                var currentUris = currentServer.getURIs();
+                var entryUris = selectedEntry.getURIs();
+                String currentUri = currentUris.isEmpty() ? null : currentUris.iterator().next().toString();
+                String entryUri = entryUris.isEmpty() ? null : entryUris.iterator().next().toString();
+
+                if (currentUri != null && currentUri.equals(entryUri)) {
+                    imageData = currentImageData;
+                }
             }
+        } catch (Exception e) {
+            logger.debug("Error comparing URIs for workflow step: {}", e.getMessage());
+            return;
         }
 
         if (imageData == null) {
-            logger.debug("No ImageData available for workflow step");
+            logger.debug("Selected entry is not the currently open image, skipping workflow step");
             return;
         }
 
@@ -2816,25 +2864,9 @@ public class OCRDialog {
                     )
             );
             logger.info("Added OCR workflow step for: {}", selectedEntry.getImageName());
-
-            // Save the ImageData if it's not the currently open image
-            if (imageData != currentImageData) {
-                // Use helper method to handle generic type safely
-                saveImageDataToEntry(selectedEntry, imageData);
-                logger.debug("Saved ImageData with workflow step");
-            }
         } catch (Exception e) {
             logger.warn("Failed to add workflow step: {}", e.getMessage());
         }
-    }
-
-    /**
-     * Helper method to save ImageData to a project entry, handling generic type casting.
-     * This is safe because the ImageData was read from the same entry.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> void saveImageDataToEntry(ProjectImageEntry<T> entry, ImageData<?> imageData) throws Exception {
-        entry.saveImageData((ImageData<T>) imageData);
     }
 
     // ========== Undo/Redo Support ==========
