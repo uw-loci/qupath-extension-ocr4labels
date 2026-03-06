@@ -165,6 +165,9 @@ public class BarcodeEngine {
      * 1. Original image
      * 2. Inverted image (for light barcodes on dark background)
      * 3. Enhanced contrast image
+     * 4. Enhanced + inverted
+     * 5. Upscaled 2x (for small regions where barcode modules are too few pixels)
+     * 6. Upscaled 3x
      *
      * @param image The image to scan
      * @return BarcodeResult containing decoded barcodes
@@ -191,7 +194,7 @@ public class BarcodeEngine {
         BufferedImage inverted = invertImage(image);
         result = decodeAll(inverted);
         if (result.hasBarcode()) {
-            logger.debug("Barcode found in inverted image");
+            logger.info("Barcode found in inverted image");
             return new BarcodeResult(result.getBarcodes(),
                     System.currentTimeMillis() - startTime);
         }
@@ -200,7 +203,7 @@ public class BarcodeEngine {
         BufferedImage enhanced = enhanceContrast(image);
         result = decodeAll(enhanced);
         if (result.hasBarcode()) {
-            logger.debug("Barcode found in contrast-enhanced image");
+            logger.info("Barcode found in contrast-enhanced image");
             return new BarcodeResult(result.getBarcodes(),
                     System.currentTimeMillis() - startTime);
         }
@@ -209,14 +212,55 @@ public class BarcodeEngine {
         BufferedImage enhancedInverted = invertImage(enhanced);
         result = decodeAll(enhancedInverted);
         if (result.hasBarcode()) {
-            logger.debug("Barcode found in enhanced+inverted image");
+            logger.info("Barcode found in enhanced+inverted image");
             return new BarcodeResult(result.getBarcodes(),
                     System.currentTimeMillis() - startTime);
         }
 
+        // Try 5-6: Upscale for small images where barcode modules may be too few pixels
+        // ZXing needs sufficient pixel resolution per barcode module to decode
+        int minDim = Math.min(image.getWidth(), image.getHeight());
+        if (minDim < 500) {
+            for (int scaleFactor = 2; scaleFactor <= 3; scaleFactor++) {
+                BufferedImage scaled = scaleImage(image, scaleFactor);
+                logger.info("Retrying barcode at {}x scale ({}x{})",
+                        scaleFactor, scaled.getWidth(), scaled.getHeight());
+                result = decodeAll(scaled);
+                if (result.hasBarcode()) {
+                    logger.info("Barcode found at {}x scale", scaleFactor);
+                    // Scale bounding boxes back to original coordinates
+                    List<BarcodeResult.DecodedBarcode> adjusted = new ArrayList<>();
+                    for (BarcodeResult.DecodedBarcode bc : result.getBarcodes()) {
+                        BoundingBox bbox = bc.getBoundingBox();
+                        BoundingBox adjBbox = bbox != null
+                                ? new BoundingBox(bbox.getX() / scaleFactor, bbox.getY() / scaleFactor,
+                                                  bbox.getWidth() / scaleFactor, bbox.getHeight() / scaleFactor)
+                                : null;
+                        adjusted.add(new BarcodeResult.DecodedBarcode(bc.getText(), bc.getFormat(), adjBbox));
+                    }
+                    return new BarcodeResult(adjusted, System.currentTimeMillis() - startTime);
+                }
+            }
+        }
+
         long processingTime = System.currentTimeMillis() - startTime;
-        logger.debug("No barcode found after all retry attempts ({}ms)", processingTime);
+        logger.info("No barcode found after all retry attempts ({}ms)", processingTime);
         return BarcodeResult.empty(processingTime);
+    }
+
+    /**
+     * Scales an image by an integer factor using bicubic interpolation.
+     */
+    private BufferedImage scaleImage(BufferedImage source, int factor) {
+        int newW = source.getWidth() * factor;
+        int newH = source.getHeight() * factor;
+        BufferedImage scaled = new BufferedImage(newW, newH, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = scaled.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g.drawImage(source, 0, 0, newW, newH, null);
+        g.dispose();
+        return scaled;
     }
 
     /**
