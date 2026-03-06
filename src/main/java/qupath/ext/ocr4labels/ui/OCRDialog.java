@@ -2157,7 +2157,8 @@ public class OCRDialog {
             return;
         }
 
-        logger.info("Starting automatic barcode detection on full label image");
+        logger.info("Starting automatic barcode detection on full label image: {}x{} type={}",
+                labelImage.getWidth(), labelImage.getHeight(), labelImage.getType());
         progressIndicator.setVisible(true);
 
         // Prepare image - apply inversion if checkbox is selected

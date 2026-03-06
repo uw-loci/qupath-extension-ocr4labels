@@ -174,12 +174,16 @@ public class BarcodeEngine {
             return BarcodeResult.error("Image cannot be null", 0);
         }
 
+        logger.info("decodeWithRetry: image {}x{} type={} bits={}",
+                image.getWidth(), image.getHeight(), image.getType(),
+                image.getSampleModel().getSampleSize(0));
+
         long startTime = System.currentTimeMillis();
 
         // Try 1: Original image
         BarcodeResult result = decodeAll(image);
         if (result.hasBarcode()) {
-            logger.debug("Barcode found in original image");
+            logger.info("Barcode found in original image: {} barcodes", result.getBarcodeCount());
             return result;
         }
 

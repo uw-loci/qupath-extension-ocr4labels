@@ -145,8 +145,11 @@ public class LabelImageUtility {
             Object image = server.getAssociatedImage(imageName);
             if (image instanceof BufferedImage) {
                 BufferedImage labelImage = (BufferedImage) image;
-                logger.debug("Retrieved label image: {}x{} pixels",
-                        labelImage.getWidth(), labelImage.getHeight());
+                logger.info("Retrieved label image: {}x{} type={} bits/sample={} bands={}",
+                        labelImage.getWidth(), labelImage.getHeight(),
+                        labelImage.getType(),
+                        labelImage.getSampleModel().getSampleSize(0),
+                        labelImage.getRaster().getNumBands());
                 return labelImage;
             } else {
                 logger.warn("Associated image '{}' is not a BufferedImage: {}",
@@ -230,6 +233,9 @@ public class LabelImageUtility {
      * Normalizes a BufferedImage to 8-bit RGB with full dynamic range.
      * Handles 16-bit images (common in CZI label images) and images with
      * unusual color models where getRGB() loses dynamic range.
+     * <p>
+     * Uses percentile-based range (0.5th to 99.5th) to avoid outlier pixels
+     * compressing the useful dynamic range.
      *
      * @param image The image to normalize
      * @return A normalized 8-bit TYPE_INT_RGB image, or the original if already 8-bit standard
@@ -243,11 +249,13 @@ public class LabelImageUtility {
         int h = image.getHeight();
         WritableRaster raster = image.getRaster();
 
+        logger.info("normalizeToEightBit: input {}x{} type={} bits={} bands={}",
+                w, h, image.getType(), bitsPerSample, numBands);
+
         // For standard 8-bit images, check if getRGB conversion loses range
         if (bitsPerSample <= 8 && image.getType() != BufferedImage.TYPE_CUSTOM) {
-            // Check if the image has reasonable contrast via getRGB
             int sampleMin = 255, sampleMax = 0;
-            int step = Math.max(1, (w * h) / 10000); // Sample ~10000 pixels
+            int step = Math.max(1, (w * h) / 10000);
             for (int i = 0; i < w * h; i += step) {
                 int x = i % w;
                 int y = i / w;
@@ -256,52 +264,94 @@ public class LabelImageUtility {
                 sampleMin = Math.min(sampleMin, gray);
                 sampleMax = Math.max(sampleMax, gray);
             }
-            // If range spans at least 50 levels, image is fine
             if (sampleMax - sampleMin >= 50) {
+                logger.info("normalizeToEightBit: 8-bit with good range ({}-{}), skipping",
+                        sampleMin, sampleMax);
                 return image;
             }
-            logger.info("8-bit image has narrow getRGB range ({}-{}), normalizing from raster",
+            logger.info("normalizeToEightBit: 8-bit with narrow getRGB range ({}-{}), normalizing",
                     sampleMin, sampleMax);
         } else if (bitsPerSample > 8) {
-            logger.info("Normalizing {}-bit image ({}x{}, {} bands) to 8-bit",
-                    bitsPerSample, w, h, numBands);
+            logger.info("normalizeToEightBit: {}-bit image requires normalization", bitsPerSample);
+        } else {
+            logger.info("normalizeToEightBit: TYPE_CUSTOM image, normalizing from raster");
         }
 
-        // Find actual min/max from raw raster data
+        // Build histogram from raster data (band 0) to find percentile range
+        int maxPossibleValue = (1 << bitsPerSample) - 1;
+        // For very high bit depths, cap histogram size and bin values
+        int histSize = Math.min(maxPossibleValue + 1, 65536);
+        int[] histogram = new int[histSize];
+        double binScale = (histSize < maxPossibleValue + 1)
+                ? (double) histSize / (maxPossibleValue + 1) : 1.0;
+
         int globalMin = Integer.MAX_VALUE;
         int globalMax = Integer.MIN_VALUE;
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                for (int b = 0; b < numBands; b++) {
-                    int val = raster.getSample(x, y, b);
-                    if (val < globalMin) globalMin = val;
-                    if (val > globalMax) globalMax = val;
-                }
+                int val = raster.getSample(x, y, 0);
+                if (val < globalMin) globalMin = val;
+                if (val > globalMax) globalMax = val;
+                int bin = (int) (val * binScale);
+                bin = Math.min(bin, histSize - 1);
+                histogram[bin]++;
             }
         }
 
-        logger.info("Raster value range: {}-{} (normalizing to 0-255)", globalMin, globalMax);
+        logger.info("normalizeToEightBit: raster range {}-{}", globalMin, globalMax);
 
-        double scale = (globalMax > globalMin) ? 255.0 / (globalMax - globalMin) : 1.0;
+        // Find 0.5th and 99.5th percentile to exclude outliers
+        int totalPixels = w * h;
+        int lowTarget = (int) (totalPixels * 0.005);
+        int highTarget = (int) (totalPixels * 0.995);
+
+        int cumulative = 0;
+        int pLow = 0;
+        for (int i = 0; i < histSize; i++) {
+            cumulative += histogram[i];
+            if (cumulative >= lowTarget) {
+                pLow = (int) (i / binScale);
+                break;
+            }
+        }
+
+        cumulative = 0;
+        int pHigh = maxPossibleValue;
+        for (int i = 0; i < histSize; i++) {
+            cumulative += histogram[i];
+            if (cumulative >= highTarget) {
+                pHigh = (int) (i / binScale);
+                break;
+            }
+        }
+
+        // Ensure some minimum range
+        if (pHigh - pLow < 10) {
+            pLow = globalMin;
+            pHigh = globalMax;
+        }
+
+        logger.info("normalizeToEightBit: using percentile range {}-{} (abs range {}-{})",
+                pLow, pHigh, globalMin, globalMax);
+
+        double scale = (pHigh > pLow) ? 255.0 / (pHigh - pLow) : 1.0;
 
         BufferedImage normalized = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
 
         if (numBands == 1) {
-            // Grayscale
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
-                    int val = (int) ((raster.getSample(x, y, 0) - globalMin) * scale);
+                    int val = (int) ((raster.getSample(x, y, 0) - pLow) * scale);
                     val = Math.max(0, Math.min(255, val));
                     normalized.setRGB(x, y, (0xFF << 24) | (val << 16) | (val << 8) | val);
                 }
             }
         } else {
-            // Multi-band (RGB, RGBA, etc.)
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
-                    int r = (int) ((raster.getSample(x, y, 0) - globalMin) * scale);
-                    int g = (int) ((raster.getSample(x, y, Math.min(1, numBands - 1)) - globalMin) * scale);
-                    int b = (int) ((raster.getSample(x, y, Math.min(2, numBands - 1)) - globalMin) * scale);
+                    int r = (int) ((raster.getSample(x, y, 0) - pLow) * scale);
+                    int g = (int) ((raster.getSample(x, y, Math.min(1, numBands - 1)) - pLow) * scale);
+                    int b = (int) ((raster.getSample(x, y, Math.min(2, numBands - 1)) - pLow) * scale);
                     r = Math.max(0, Math.min(255, r));
                     g = Math.max(0, Math.min(255, g));
                     b = Math.max(0, Math.min(255, b));
@@ -309,6 +359,19 @@ public class LabelImageUtility {
                 }
             }
         }
+
+        // Verify output range
+        int outMin = 255, outMax = 0;
+        int step = Math.max(1, (w * h) / 5000);
+        for (int i = 0; i < w * h; i += step) {
+            int x = i % w;
+            int y = i / w;
+            int rgb = normalized.getRGB(x, y);
+            int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
+            outMin = Math.min(outMin, gray);
+            outMax = Math.max(outMax, gray);
+        }
+        logger.info("normalizeToEightBit: output range {}-{}", outMin, outMax);
 
         return normalized;
     }
