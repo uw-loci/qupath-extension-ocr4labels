@@ -219,7 +219,6 @@ public class BarcodeEngine {
         }
 
         // Try 5-6: Upscale for small images where barcode modules may be too few pixels
-        // ZXing needs sufficient pixel resolution per barcode module to decode
         int minDim = Math.min(image.getWidth(), image.getHeight());
         if (minDim < 500) {
             for (int scaleFactor = 2; scaleFactor <= 3; scaleFactor++) {
@@ -229,24 +228,73 @@ public class BarcodeEngine {
                 result = decodeAll(scaled);
                 if (result.hasBarcode()) {
                     logger.info("Barcode found at {}x scale", scaleFactor);
-                    // Scale bounding boxes back to original coordinates
-                    List<BarcodeResult.DecodedBarcode> adjusted = new ArrayList<>();
-                    for (BarcodeResult.DecodedBarcode bc : result.getBarcodes()) {
-                        BoundingBox bbox = bc.getBoundingBox();
-                        BoundingBox adjBbox = bbox != null
-                                ? new BoundingBox(bbox.getX() / scaleFactor, bbox.getY() / scaleFactor,
-                                                  bbox.getWidth() / scaleFactor, bbox.getHeight() / scaleFactor)
-                                : null;
-                        adjusted.add(new BarcodeResult.DecodedBarcode(bc.getText(), bc.getFormat(), adjBbox));
-                    }
-                    return new BarcodeResult(adjusted, System.currentTimeMillis() - startTime);
+                    return adjustBoundingBoxes(result, 0, 0, scaleFactor,
+                            System.currentTimeMillis() - startTime);
                 }
             }
+        }
+
+        // Try 7: Scan overlapping quadrants for larger images where the barcode
+        // is a small fraction of the total area. ZXing's local binarizer can fail
+        // when text, borders, and barcodes compete across the full image.
+        int w = image.getWidth();
+        int h = image.getHeight();
+        if (w > 300 && h > 300) {
+            int halfW = w / 2;
+            int halfH = h / 2;
+            // Overlap by 25% to avoid splitting a barcode at a boundary
+            int overlapW = w / 4;
+            int overlapH = h / 4;
+
+            int[][] quadrants = {
+                {0, 0, halfW + overlapW, halfH + overlapH},              // top-left
+                {halfW - overlapW, 0, w - halfW + overlapW, halfH + overlapH},  // top-right
+                {0, halfH - overlapH, halfW + overlapW, h - halfH + overlapH},  // bottom-left
+                {halfW - overlapW, halfH - overlapH, w - halfW + overlapW, h - halfH + overlapH}  // bottom-right
+            };
+
+            for (int i = 0; i < quadrants.length; i++) {
+                int qx = quadrants[i][0];
+                int qy = quadrants[i][1];
+                int qw = Math.min(quadrants[i][2], w - qx);
+                int qh = Math.min(quadrants[i][3], h - qy);
+
+                if (qw < 50 || qh < 50) continue;
+
+                BufferedImage quadrant = image.getSubimage(qx, qy, qw, qh);
+                result = decodeAll(quadrant);
+                if (result.hasBarcode()) {
+                    logger.info("Barcode found in quadrant {} (x={}, y={}, {}x{})",
+                            i, qx, qy, qw, qh);
+                    return adjustBoundingBoxes(result, qx, qy, 1,
+                            System.currentTimeMillis() - startTime);
+                }
+            }
+            logger.debug("No barcode found in any quadrant");
         }
 
         long processingTime = System.currentTimeMillis() - startTime;
         logger.info("No barcode found after all retry attempts ({}ms)", processingTime);
         return BarcodeResult.empty(processingTime);
+    }
+
+    /**
+     * Adjusts bounding boxes for offset and scale, returning a new BarcodeResult.
+     */
+    private BarcodeResult adjustBoundingBoxes(BarcodeResult result, int offsetX, int offsetY,
+                                               int scaleFactor, long processingTime) {
+        List<BarcodeResult.DecodedBarcode> adjusted = new ArrayList<>();
+        for (BarcodeResult.DecodedBarcode bc : result.getBarcodes()) {
+            BoundingBox bbox = bc.getBoundingBox();
+            BoundingBox adjBbox = bbox != null
+                    ? new BoundingBox(bbox.getX() / scaleFactor + offsetX,
+                                      bbox.getY() / scaleFactor + offsetY,
+                                      bbox.getWidth() / scaleFactor,
+                                      bbox.getHeight() / scaleFactor)
+                    : null;
+            adjusted.add(new BarcodeResult.DecodedBarcode(bc.getText(), bc.getFormat(), adjBbox));
+        }
+        return new BarcodeResult(adjusted, processingTime);
     }
 
     /**
