@@ -1,6 +1,5 @@
 package qupath.ext.ocr4labels.controller;
 
-import javafx.stage.DirectoryChooser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.ocr4labels.model.BarcodeResult;
@@ -254,7 +253,7 @@ public class OCRController {
 
     /**
      * Ensures the OCR engine is initialized.
-     * Prompts user for tessdata path if not configured.
+     * Directs user to OCR Settings if not configured.
      *
      * @return true if engine is ready, false otherwise
      */
@@ -267,18 +266,31 @@ public class OCRController {
 
         // Check if path is configured
         if (tessdataPath == null || tessdataPath.isEmpty()) {
-            tessdataPath = promptForTessdataPath();
-            if (tessdataPath == null) {
-                return false;
+            boolean openSettings = Dialogs.showConfirmDialog(
+                    "OCR Setup Required",
+                    "OCR requires language data files before it can recognize text.\n\n" +
+                    "To get started:\n" +
+                    "  1. Open OCR Settings (click Yes)\n" +
+                    "  2. Download the required files from the 'Required Downloads' section\n" +
+                    "  3. Set the 'Tessdata Path' to the folder containing those files\n\n" +
+                    "Open OCR Settings now?");
+
+            if (openSettings) {
+                OCRSettingsDialog.show(qupath);
             }
+            return false;
         }
 
         // Verify path exists
         File tessdataDir = new File(tessdataPath);
         if (!tessdataDir.exists() || !tessdataDir.isDirectory()) {
-            Dialogs.showErrorMessage("OCR Configuration Error",
-                    "Tessdata directory not found: " + tessdataPath + "\n\n" +
-                            "Please configure the tessdata path in OCR Settings.");
+            boolean openSettings = Dialogs.showConfirmDialog(
+                    "OCR Configuration Error",
+                    "Tessdata directory not found:\n  " + tessdataPath + "\n\n" +
+                    "Open OCR Settings to fix the path?");
+            if (openSettings) {
+                OCRSettingsDialog.show(qupath);
+            }
             return false;
         }
 
@@ -291,8 +303,8 @@ public class OCRController {
                     "The language data file was not found:\n" +
                     "  " + langFile.getName() + "\n\n" +
                     "OCR requires this file to recognize text on labels.\n\n" +
-                    "Would you like to open OCR Settings to download it?\n\n" +
-                    "(Look for the 'Required Downloads' section)");
+                    "Open OCR Settings to download it?\n" +
+                    "(See the 'Required Downloads' section for clickable download links)");
 
             if (openSettings) {
                 OCRSettingsDialog.show(qupath);
@@ -310,7 +322,7 @@ public class OCRController {
                         "Without this file, rotated or sideways labels may not be read correctly.\n\n" +
                         "Options:\n" +
                         "  - Click 'Yes' to continue without orientation detection\n" +
-                        "  - Click 'No' to cancel and download the file from OCR Settings\n\n" +
+                        "  - Click 'No' to open OCR Settings and download the file\n\n" +
                         "Continue anyway?");
 
                 if (!proceed) {
@@ -334,34 +346,6 @@ public class OCRController {
                     "Failed to initialize OCR engine:\n" + e.getMessage());
             return false;
         }
-    }
-
-    /**
-     * Prompts the user to select the tessdata directory.
-     *
-     * @return The selected path, or null if cancelled
-     */
-    private String promptForTessdataPath() {
-        // Show info dialog first
-        Dialogs.showMessageDialog("OCR Setup Required",
-                "To use OCR, you need to configure the Tesseract data directory.\n\n" +
-                        "1. Download language data from: https://github.com/tesseract-ocr/tessdata\n" +
-                        "2. Place the .traineddata file(s) in a 'tessdata' folder\n" +
-                        "3. Select that folder in the next dialog");
-
-        // Show directory chooser using JavaFX DirectoryChooser
-        DirectoryChooser chooser = new DirectoryChooser();
-        chooser.setTitle("Select Tessdata Directory");
-        File selectedDir = chooser.showDialog(null);
-
-        if (selectedDir != null && selectedDir.isDirectory()) {
-            String path = selectedDir.getAbsolutePath();
-            OCRPreferences.setTessdataPath(path);
-            logger.info("Tessdata path set to: {}", path);
-            return path;
-        }
-
-        return null;
     }
 
     /**
