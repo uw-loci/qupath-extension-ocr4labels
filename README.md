@@ -137,7 +137,7 @@ Region types are color-coded on the overlay:
 | Color | Type | Label |
 |-------|------|-------|
 | Green | Text | `1[T]` |
-| Blue | Barcode | `2[BC]` |
+| Orange | Barcode | `2[BC]` |
 | Purple | Auto | `3[A]` |
 | Yellow | Selected | (any type) |
 

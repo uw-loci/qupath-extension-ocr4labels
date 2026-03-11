@@ -581,9 +581,10 @@ public class OCRDialog {
         updateMetadataPreview();
         drawBoundingBoxes();
 
-        // Auto-run OCR if enabled and we have a label image
+        // Auto-run scan if enabled and we have a label image
+        // Uses performUnifiedScan to respect current Scope/Type settings (e.g. Try Both)
         if (labelImage != null && OCRPreferences.isAutoRunOnEntrySwitch()) {
-            Platform.runLater(this::runOCR);
+            Platform.runLater(this::performUnifiedScan);
         }
     }
 
@@ -1894,7 +1895,7 @@ public class OCRDialog {
             } else {
                 switch (entry.getRegionType()) {
                     case BARCODE:
-                        strokeColor = Color.DODGERBLUE;
+                        strokeColor = Color.rgb(255, 140, 0); // Neon orange - visible against dark barcode backgrounds
                         break;
                     case AUTO:
                         strokeColor = Color.MEDIUMPURPLE;
