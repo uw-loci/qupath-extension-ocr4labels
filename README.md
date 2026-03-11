@@ -43,42 +43,50 @@ Before using OCR, you need to download Tesseract language data files:
 
 ## Usage
 
-### Single Image OCR
+### Single Image Scanning
 
 1. Open an image with a label in QuPath
 2. Go to **Extensions > OCR for Labels > Run OCR on Label**
 3. The OCR Dialog opens showing all project images on the left
 4. Select an image from the list (or use the currently open image)
-5. Click **Run OCR** to detect text on the label
-6. Review detected text blocks in the table:
+5. Configure scan settings:
+   - **Scope**: "Full Image" (entire label) or "Selection" (drawn rectangle)
+   - **Type**: "Text" (OCR), "Barcode" (ZXing), or "Auto" (barcode first, then OCR)
+   - **Min Conf**: Minimum confidence threshold for text results
+6. Click **Scan** to detect content on the label
+7. Review detected content in the table:
    - Edit the **Text** column to correct OCR mistakes
    - Edit the **Metadata Key** column to set field names
-7. Click **Apply** to save metadata to the selected image
+8. Click **Apply** to save metadata to the selected image
 
-### Barcode Detection
+**Important:** Each click of **Scan** clears previous results and starts fresh. This lets you iteratively adjust settings (e.g., lower the Min Conf threshold, change Type, or switch Scope) and immediately see the effect without accumulating stale results. Use **Ctrl+Z** to undo if needed.
 
-1. Open an image with a barcode on the label
-2. Go to **Extensions > OCR for Labels > Run OCR on Label**
-3. Click **Find Barcodes** to automatically scan the entire label
-4. All detected barcodes appear in the table with:
-   - Decoded text content
-   - Barcode format (QR_CODE, CODE_128, etc.)
-   - Bounding box position (shown in blue on the overlay)
-5. Edit metadata keys as needed
-6. Click **Apply** to save metadata
-
-### Manual Region Selection
+### Region Selection Scanning
 
 For difficult regions or mixed content:
 
-1. Click **Select Region** toggle button
-2. Draw a rectangle around the target area
+1. Set **Scope** to "Selection"
+2. Draw a rectangle around the target area on the label image
 3. Select the **Type**:
    - **Text**: Use OCR (Tesseract)
    - **Barcode**: Use barcode scanner (ZXing)
    - **Auto**: Try barcode first, fall back to OCR
-4. Click **Scan Region**
-5. Result is added to the fields table
+4. Click **Scan**
+5. Results replace any previous scan output in the fields table
+
+### Creating Templates with Manual Regions
+
+You can define template regions manually without scanning, which is useful when you know where fields are on the label but want to control exactly what areas get decoded:
+
+1. Click **Draw Region** to enable drawing mode
+2. Draw a rectangle around the target area
+3. Set **Decode As** to the desired type (Text, Barcode, or Try Both)
+4. Click **Add Region** to add it as a field entry (no scanning is performed)
+5. Repeat steps 2-4 for each region on the label
+6. Edit the **Metadata Key** column to set meaningful field names
+7. Click **Save Template...** to save the regions for batch use
+
+The saved template preserves each region's position, type, and metadata key. When applied to other slides, each region is cropped and decoded according to its type.
 
 ### Batch Processing
 
@@ -141,15 +149,16 @@ Region types are color-coded on the overlay:
 
 | Control | Description |
 |---------|-------------|
-| **Run OCR** | Performs OCR on the current label image |
+| **Scope** | "Full Image" scans the entire label; "Selection" scans a drawn rectangle |
+| **Decode As** | Content type: Text (OCR), Barcode (ZXing), or Try Both (barcode then OCR) |
+| **Scan** | Runs detection using current Scope and Decode As settings. Clears previous results each time |
+| **Draw Region** | Toggle drawing mode to select an area on the label image |
+| **Add Region** | Adds the drawn rectangle as a template field without scanning (for manual template creation) |
+| **Clear** | Clears the current drawn selection |
 | **Mode** | Page segmentation mode - controls how Tesseract analyzes the image layout |
 | **Min Conf** | Minimum confidence threshold (0-100%) - text below this is filtered out |
 | **Invert** | Inverts image colors - use for labels with light text on dark backgrounds |
 | **Enhance** | Improves image contrast before OCR - recommended for faded labels |
-| **Select Region** | Toggle to draw a rectangle and scan only that area |
-| **Type** | Content type for region scanning: Text, Barcode, or Auto |
-| **Scan Region** | Runs OCR/barcode scan on the selected region |
-| **Find Barcodes** | Automatically detects all barcodes in the entire label image |
 
 ### Page Segmentation Modes
 
@@ -169,7 +178,10 @@ Region types are color-coded on the overlay:
 |---------|-------------|
 | **Fit** | Scales image to fit the panel |
 | **100%** | Shows image at actual pixel size |
-| **Mouse Drag** | When "Select Region" is active, drag to draw selection rectangle |
+| **Mouse Drag** | When "Draw Region" is active, drag to draw selection rectangle |
+| **Adjust Image** | Min/Max sliders to adjust display brightness/contrast (does not affect scanning) |
+| **Auto** | Auto-adjusts display range based on image histogram (2nd-98th percentile) |
+| **Reset** | Resets display range to full 0-255 |
 
 ### Detected Fields Table
 

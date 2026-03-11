@@ -111,6 +111,7 @@ public class OCRDialog {
     private ComboBox<RegionType> regionTypeCombo;
     private ComboBox<String> scopeCombo;
     private Button scanButton;
+    private Button addRegionButton;
 
     // Template state
     private OCRTemplate currentTemplate;
@@ -346,6 +347,17 @@ public class OCRDialog {
             updateScanButtonState();
         });
 
+        // Add Region button - creates a template field from the drawn selection without scanning
+        Button addRegionBtn = new Button("Add Region");
+        addRegionBtn.setTooltip(new Tooltip(
+                "Add the drawn rectangle as a template region without scanning.\n\n" +
+                "Use this to define areas on the label for template-based\n" +
+                "batch processing. The Decode As type determines how the\n" +
+                "region will be decoded when the template is applied.\n\n" +
+                "Workflow: Draw regions -> Add Region -> Save Template"));
+        addRegionBtn.setDisable(true);
+        addRegionBtn.setOnAction(e -> addRegionFromSelection());
+
         Button clearSelectionBtn = new Button("Clear");
         clearSelectionBtn.setTooltip(new Tooltip("Clear the current selection"));
         clearSelectionBtn.setOnAction(e -> {
@@ -406,6 +418,9 @@ public class OCRDialog {
         // Keep reference for backward compatibility
         runOCRButton = scanButton;
 
+        // Store reference so updateScanButtonState can enable/disable it
+        this.addRegionButton = addRegionBtn;
+
         return new ToolBar(
                 // Scan section
                 scanButton,
@@ -418,6 +433,7 @@ public class OCRDialog {
                 new Separator(),
                 // Selection section
                 selectRegionButton,
+                addRegionBtn,
                 clearSelectionBtn,
                 new Separator(),
                 // OCR Settings section
@@ -489,24 +505,19 @@ public class OCRDialog {
         entryListView.getSelectionModel().selectedItemProperty().addListener((obs, oldEntry, newEntry) -> {
             if (newEntry != null && newEntry != oldEntry) {
                 if (isDirty && !fieldEntries.isEmpty()) {
-                    // Prompt before switching
+                    // Prompt before switching - only Save and Discard, no Cancel to avoid loop
                     ButtonType saveBtn = new ButtonType("Save", ButtonBar.ButtonData.YES);
                     ButtonType discardBtn = new ButtonType("Discard", ButtonBar.ButtonData.NO);
-                    ButtonType cancelBtn = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
 
                     var result = Dialogs.builder()
                             .title("Unsaved Changes")
                             .contentText("Save current field mappings before switching images?")
-                            .buttons(saveBtn, discardBtn, cancelBtn)
+                            .buttons(saveBtn, discardBtn)
                             .showAndWait()
-                            .orElse(cancelBtn);
+                            .orElse(discardBtn);
 
                     if (result == saveBtn) {
                         saveTemplate();
-                    } else if (result == cancelBtn) {
-                        // Revert selection - need to do this on next frame to avoid listener recursion
-                        Platform.runLater(() -> entryListView.getSelectionModel().select(oldEntry));
-                        return;
                     }
                     // Discard or saved - continue with switch
                 }
@@ -898,6 +909,9 @@ public class OCRDialog {
         HBox bcControls = new HBox(8);
         bcControls.setAlignment(Pos.CENTER_LEFT);
 
+        Label adjustLabel = new Label("Adjust Image:");
+        adjustLabel.setStyle("-fx-font-size: 11px; -fx-font-weight: bold;");
+
         Label minLabel = new Label("Min:");
         minLabel.setStyle("-fx-font-size: 11px;");
         displayMinSlider = new Slider(0, 255, 0);
@@ -946,7 +960,7 @@ public class OCRDialog {
             displayMaxSlider.setValue(255);
         });
 
-        bcControls.getChildren().addAll(
+        bcControls.getChildren().addAll(adjustLabel,
                 minLabel, displayMinSlider,
                 maxLabel, displayMaxSlider,
                 rangeValueLabel, autoButton, resetBCButton);
@@ -1453,17 +1467,31 @@ public class OCRDialog {
         } else {
             scanButton.setText("Scan");
         }
+
+        // Add Region is enabled when there is a drawn selection on a loaded image
+        if (addRegionButton != null) {
+            addRegionButton.setDisable(!hasSelection || labelImage == null);
+        }
     }
 
     /**
      * Performs unified scanning based on current scope and decode type settings.
      * Consolidates "Run OCR", "Scan Region", and "Find Barcodes" into a single operation.
+     * Each scan clears previous results so the user sees only the current scan output.
      */
     private void performUnifiedScan() {
         if (labelImage == null) {
             Dialogs.showWarningNotification("No Label Image",
                     "Please select an image with a label first.");
             return;
+        }
+
+        // Clear previous results before each scan so results don't accumulate
+        if (!fieldEntries.isEmpty()) {
+            saveStateForUndo();
+            fieldEntries.clear();
+            updateMetadataPreview();
+            drawBoundingBoxes();
         }
 
         String scope = scopeCombo.getValue();
@@ -2522,6 +2550,48 @@ public class OCRDialog {
         fieldEntries.add(entry);
         fieldsTable.getSelectionModel().select(entry);
         updateMetadataPreview();
+    }
+
+    /**
+     * Adds the current drawn selection as a field entry without scanning.
+     * This allows users to define template regions manually by drawing rectangles
+     * and specifying the decode type, then saving as a template for batch use.
+     */
+    private void addRegionFromSelection() {
+        if (!hasSelection || labelImage == null) return;
+
+        double scaleX = imageView.getBoundsInLocal().getWidth() / labelImage.getWidth();
+        double scaleY = imageView.getBoundsInLocal().getHeight() / labelImage.getHeight();
+        double scale = Math.min(scaleX, scaleY);
+
+        int imgX = (int) Math.max(0, Math.min(selectionStartX, selectionEndX) / scale);
+        int imgY = (int) Math.max(0, Math.min(selectionStartY, selectionEndY) / scale);
+        int imgW = (int) Math.min(labelImage.getWidth() - imgX, Math.abs(selectionEndX - selectionStartX) / scale);
+        int imgH = (int) Math.min(labelImage.getHeight() - imgY, Math.abs(selectionEndY - selectionStartY) / scale);
+
+        if (imgW < 5 || imgH < 5) {
+            Dialogs.showWarningNotification("Selection Too Small",
+                    "Please draw a larger selection area.");
+            return;
+        }
+
+        saveStateForUndo();
+        String prefix = OCRPreferences.getMetadataPrefix();
+        RegionType type = regionTypeCombo.getValue();
+        String typePrefix = type == RegionType.BARCODE ? "barcode_" : "field_";
+        String key = prefix + typePrefix + fieldEntries.size();
+
+        BoundingBox bbox = new BoundingBox(imgX, imgY, imgW, imgH);
+        OCRFieldEntry entry = new OCRFieldEntry("", key, 1.0f, bbox, type);
+        fieldEntries.add(entry);
+        fieldsTable.getSelectionModel().select(entry);
+
+        updateMetadataPreview();
+        drawBoundingBoxes();
+        resetRegionSelection();
+
+        logger.info("Added manual region: type={}, bbox=({},{},{},{}), key={}",
+                type, imgX, imgY, imgW, imgH, key);
     }
 
     /**
