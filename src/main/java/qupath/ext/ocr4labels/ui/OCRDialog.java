@@ -581,9 +581,10 @@ public class OCRDialog {
         updateMetadataPreview();
         drawBoundingBoxes();
 
-        // Auto-run OCR if enabled and we have a label image
+        // Auto-run scan if enabled and we have a label image
+        // Uses performUnifiedScan to respect current Scope/Type settings (e.g. Try Both)
         if (labelImage != null && OCRPreferences.isAutoRunOnEntrySwitch()) {
-            Platform.runLater(this::runOCR);
+            Platform.runLater(this::performUnifiedScan);
         }
     }
 
