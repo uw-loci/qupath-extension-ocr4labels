@@ -1895,7 +1895,7 @@ public class OCRDialog {
             } else {
                 switch (entry.getRegionType()) {
                     case BARCODE:
-                        strokeColor = Color.DODGERBLUE;
+                        strokeColor = Color.rgb(255, 140, 0); // Neon orange - visible against dark barcode backgrounds
                         break;
                     case AUTO:
                         strokeColor = Color.MEDIUMPURPLE;
