@@ -896,7 +896,7 @@ The extension JAR will be created in `build/libs/`.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache License 2.0 - see [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
@@ -904,3 +904,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [Tess4J](https://github.com/nguyenq/tess4j) - Java JNA wrapper for Tesseract
 - [ZXing](https://github.com/zxing/zxing) - Open source barcode scanning library
 - [QuPath](https://qupath.github.io/) - Open source software for bioimage analysis
+
+## AI-Assisted Development
+
+This project was developed with assistance from [Claude](https://claude.ai) (Anthropic). Claude was used as a development tool for code generation, architecture design, debugging, and documentation throughout the project.
