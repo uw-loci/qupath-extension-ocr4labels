@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- Exclusion filter for qupath-extension-ocr4labels. -->
+    <!-- Keep this list minimal: only well-understood false positives. -->
+</FindBugsFilter>

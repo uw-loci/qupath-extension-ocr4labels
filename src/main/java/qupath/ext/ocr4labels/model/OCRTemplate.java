@@ -314,7 +314,8 @@ public class OCRTemplate {
      * @throws IOException if saving fails
      */
     public void saveToFile(File file) throws IOException {
-        try (Writer writer = new FileWriter(file)) {
+        try (Writer writer = java.nio.file.Files.newBufferedWriter(
+                file.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
             GSON.toJson(this, writer);
             logger.info("Saved OCR template to: {}", file.getAbsolutePath());
         }
@@ -328,7 +329,8 @@ public class OCRTemplate {
      * @throws IOException if loading fails
      */
     public static OCRTemplate loadFromFile(File file) throws IOException {
-        try (Reader reader = new FileReader(file)) {
+        try (Reader reader = java.nio.file.Files.newBufferedReader(
+                file.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
             OCRTemplate template = GSON.fromJson(reader, OCRTemplate.class);
             logger.info("Loaded OCR template from: {}", file.getAbsolutePath());
             return template;

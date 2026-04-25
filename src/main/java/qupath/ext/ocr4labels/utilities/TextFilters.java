@@ -83,16 +83,17 @@ public class TextFilters {
     );
 
     /**
-     * All available predefined filters.
+     * All available predefined filters. Returned as an unmodifiable list so
+     * callers cannot mutate the shared filter set.
      */
-    public static final TextFilter[] ALL_FILTERS = {
+    public static final java.util.List<TextFilter> ALL_FILTERS = java.util.List.of(
             LETTERS_ONLY,
             NUMBERS_ONLY,
             ALPHANUMERIC,
             FILENAME_SAFE,
             STANDARD_CHARS,
             NO_WHITESPACE
-    };
+    );
 
     /**
      * Applies a filter to the given text.

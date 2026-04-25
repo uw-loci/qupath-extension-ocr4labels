@@ -3,6 +3,8 @@ plugins {
     id("com.gradleup.shadow") version "8.3.5"
     // QuPath Gradle extension convention plugin
     id("qupath-conventions")
+    // Static bug detection
+    id("com.github.spotbugs") version "6.5.0"
 }
 
 // Configure your extension here
@@ -60,4 +62,17 @@ tasks.test {
         "--add-modules", "javafx.base,javafx.graphics,javafx.controls",
         "--add-opens", "javafx.graphics/javafx.stage=ALL-UNNAMED"
     )
+}
+
+// ---------------------------------------------------------------------------
+// SpotBugs -- static bug detection (gates the build)
+// ---------------------------------------------------------------------------
+spotbugs {
+    effort.set(com.github.spotbugs.snom.Effort.MAX)
+    reportLevel.set(com.github.spotbugs.snom.Confidence.HIGH)
+    excludeFilter.set(file("config/spotbugs/exclude.xml"))
+}
+
+tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
+    reports.create("html") { required.set(true) }
 }
