@@ -616,6 +616,7 @@ public class OCREngine {
 
         // Also try to get lines for better grouping
         try {
+            List<TextBlock> lineBlocks = new ArrayList<>();
             List<Word> lines = tesseract.getWords(image, ITessAPI.TessPageIteratorLevel.RIL_TEXTLINE);
             for (Word line : lines) {
                 String text = line.getText();
@@ -629,14 +630,73 @@ public class OCREngine {
                 if (confidence >= config.getMinConfidence()) {
                     BoundingBox bbox = new BoundingBox(rect.x, rect.y, rect.width, rect.height);
                     TextBlock block = TextBlock.line(text.trim(), bbox, confidence);
-                    blocks.add(block);
+                    lineBlocks.add(block);
                 }
             }
+
+            // Deduplicate LINE blocks: Tesseract can return the same text line
+            // multiple times with overlapping bounding boxes from different
+            // paragraph/block segmentations. Keep the higher-confidence version.
+            List<TextBlock> dedupedLines = deduplicateTextBlocks(lineBlocks);
+            if (dedupedLines.size() < lineBlocks.size()) {
+                logger.info("Deduplicated LINE blocks: {} -> {}", lineBlocks.size(), dedupedLines.size());
+            }
+            blocks.addAll(dedupedLines);
         } catch (Exception e) {
             logger.debug("Could not extract lines: {}", e.getMessage());
         }
 
         return blocks;
+    }
+
+    /**
+     * Removes duplicate text blocks that have substantially overlapping bounding boxes.
+     * Two blocks are considered duplicates if their bounding boxes overlap by more than
+     * 50% of the smaller block's area. When duplicates are found, the block with higher
+     * confidence is kept.
+     */
+    private List<TextBlock> deduplicateTextBlocks(List<TextBlock> blocks) {
+        if (blocks.size() <= 1) {
+            return blocks;
+        }
+
+        List<TextBlock> result = new ArrayList<>();
+        boolean[] merged = new boolean[blocks.size()];
+
+        for (int i = 0; i < blocks.size(); i++) {
+            if (merged[i]) continue;
+
+            TextBlock best = blocks.get(i);
+            for (int j = i + 1; j < blocks.size(); j++) {
+                if (merged[j]) continue;
+
+                TextBlock other = blocks.get(j);
+                BoundingBox a = best.getBoundingBox();
+                BoundingBox b = other.getBoundingBox();
+
+                if (a != null && b != null && a.intersects(b)) {
+                    // Calculate intersection area
+                    int ix = Math.max(a.getX(), b.getX());
+                    int iy = Math.max(a.getY(), b.getY());
+                    int ix2 = Math.min(a.getMaxX(), b.getMaxX());
+                    int iy2 = Math.min(a.getMaxY(), b.getMaxY());
+                    int overlapArea = Math.max(0, ix2 - ix) * Math.max(0, iy2 - iy);
+
+                    int smallerArea = Math.min(a.getArea(), b.getArea());
+                    if (smallerArea > 0 && overlapArea > smallerArea * 0.5) {
+                        // Significant overlap - keep the higher confidence one
+                        merged[j] = true;
+                        if (other.getConfidence() > best.getConfidence()) {
+                            best = other;
+                        }
+                        logger.debug("Removed duplicate block: '{}'", other.getText());
+                    }
+                }
+            }
+            result.add(best);
+        }
+
+        return result;
     }
 
     /**

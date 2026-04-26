@@ -304,6 +304,7 @@ public class OCRDialog {
 
         // Scope dropdown: Full Image vs Selected Region
         Label scopeLabel = new Label("Scope:");
+        scopeLabel.setTooltip(new Tooltip("Choose what area of the label image to scan"));
         scopeCombo = new ComboBox<>();
         scopeCombo.getItems().addAll("Full Image", "Selection");
         scopeCombo.setValue("Full Image");
@@ -316,6 +317,7 @@ public class OCRDialog {
 
         // Type/Decode dropdown
         Label decodeLabel = new Label("Decode As:");
+        decodeLabel.setTooltip(new Tooltip("Choose how to decode the scanned content"));
         regionTypeCombo = new ComboBox<>();
         regionTypeCombo.getItems().addAll(RegionType.values());
         regionTypeCombo.setValue(RegionType.AUTO);
@@ -373,6 +375,7 @@ public class OCRDialog {
 
         // PSM Mode dropdown - Sparse Text is best default for slide labels
         Label psmLabel = new Label("Mode:");
+        psmLabel.setTooltip(new Tooltip("OCR text detection mode"));
         psmCombo = new ComboBox<>();
         psmCombo.getItems().addAll(PSMOption.values());
         psmCombo.setValue(PSMOption.SPARSE_TEXT);
@@ -385,6 +388,7 @@ public class OCRDialog {
 
         // Confidence slider
         Label confLabel = new Label("Min Conf:");
+        confLabel.setTooltip(new Tooltip("Minimum confidence threshold for text detection"));
         confSlider = new Slider(0, 100, OCRPreferences.getMinConfidence() * 100);
         confSlider.setPrefWidth(80);
         confSlider.setShowTickMarks(true);
@@ -915,6 +919,7 @@ public class OCRDialog {
 
         Label minLabel = new Label("Min:");
         minLabel.setStyle("-fx-font-size: 11px;");
+        minLabel.setTooltip(new Tooltip("Minimum display value (black point)"));
         displayMinSlider = new Slider(0, 255, 0);
         displayMinSlider.setPrefWidth(90);
         displayMinSlider.setTooltip(new Tooltip(
@@ -924,6 +929,7 @@ public class OCRDialog {
 
         Label maxLabel = new Label("Max:");
         maxLabel.setStyle("-fx-font-size: 11px;");
+        maxLabel.setTooltip(new Tooltip("Maximum display value (white point)"));
         displayMaxSlider = new Slider(0, 255, 255);
         displayMaxSlider.setPrefWidth(90);
         displayMaxSlider.setTooltip(new Tooltip(
@@ -2798,7 +2804,14 @@ public class OCRDialog {
         for (OCRTemplate.FieldMapping mapping : currentTemplate.getFieldMappings()) {
             if (!mapping.isEnabled() || !mapping.hasBoundingBox()) continue;
 
-            int[] box = mapping.getScaledBoundingBox(imgWidth, imgHeight, dilation);
+            // Barcode regions need more context than text - ZXing requires quiet
+            // zones around the barcode for reliable decoding
+            RegionType regionType = mapping.getRegionType();
+            double effectiveDilation = (regionType == RegionType.BARCODE || regionType == RegionType.AUTO)
+                    ? Math.max(dilation, 2.5)
+                    : dilation;
+
+            int[] box = mapping.getScaledBoundingBox(imgWidth, imgHeight, effectiveDilation);
             if (box == null || box[2] < 5 || box[3] < 5) continue;
 
             BufferedImage regionImage;

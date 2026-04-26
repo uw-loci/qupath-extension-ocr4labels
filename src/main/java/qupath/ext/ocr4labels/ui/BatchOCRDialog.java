@@ -183,6 +183,7 @@ public class BatchOCRDialog {
 
         Label templateLabel = new Label("Field Mappings:");
         templateLabel.setStyle("-fx-font-weight: bold;");
+        templateLabel.setTooltip(new Tooltip("Define which detected text fields map to metadata keys"));
 
         Button createFromCurrentBtn = new Button("Create from Current Image");
         createFromCurrentBtn.setTooltip(new Tooltip(
@@ -348,6 +349,7 @@ public class BatchOCRDialog {
 
         Label filterLabel = new Label("Filter all fields:");
         filterLabel.setStyle("-fx-font-size: 11px;");
+        filterLabel.setTooltip(new Tooltip("Apply text post-processing filters to all processed fields"));
 
         // Create filter buttons
         for (TextFilters.TextFilter filter : TextFilters.ALL_FILTERS) {
@@ -976,11 +978,18 @@ public class BatchOCRDialog {
         for (OCRTemplate.FieldMapping mapping : currentTemplate.getFieldMappings()) {
             if (!mapping.isEnabled() || !mapping.hasBoundingBox()) continue;
 
-            int[] box = mapping.getScaledBoundingBox(imgWidth, imgHeight, dilation);
-            if (box == null || box[2] < 5 || box[3] < 5) continue;
-
             String key = mapping.getMetadataKey();
             RegionType regionType = mapping.getRegionType();
+
+            // Barcode regions need more context than text regions. ZXing bounding
+            // boxes are very tight around the barcode modules - the decoder needs
+            // quiet zones and surrounding whitespace to reliably decode.
+            double effectiveDilation = (regionType == RegionType.BARCODE || regionType == RegionType.AUTO)
+                    ? Math.max(dilation, 2.5)
+                    : dilation;
+
+            int[] box = mapping.getScaledBoundingBox(imgWidth, imgHeight, effectiveDilation);
+            if (box == null || box[2] < 5 || box[3] < 5) continue;
 
             try {
                 // Extract region
