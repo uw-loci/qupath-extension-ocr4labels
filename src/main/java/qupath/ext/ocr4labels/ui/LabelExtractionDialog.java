@@ -85,7 +85,14 @@ public class LabelExtractionDialog {
         Label sourceLabel = new Label("Source Image:");
         sourceLabel.setTooltip(sourceCombo.getTooltip());
 
-        HBox sourceRow = new HBox(8, sourceLabel, sourceCombo);
+        // Warn if no associated images available
+        Label noImagesLabel = new Label();
+        if (sourceCombo.getItems().isEmpty()) {
+            noImagesLabel.setText("No associated images available for this slide.");
+            noImagesLabel.setStyle("-fx-text-fill: orange; -fx-font-style: italic;");
+        }
+
+        HBox sourceRow = new HBox(8, sourceLabel, sourceCombo, noImagesLabel);
         sourceRow.setAlignment(Pos.CENTER_LEFT);
 
         // Source image display with crop overlay
@@ -100,6 +107,12 @@ public class LabelExtractionDialog {
 
         imagePane.getChildren().addAll(sourceView, overlayCanvas);
         imagePane.setStyle("-fx-border-color: #666; -fx-border-width: 1;");
+
+        // Re-sync canvas when the image pane resizes
+        imagePane.widthProperty().addListener((obs, o, n) ->
+                javafx.application.Platform.runLater(this::syncCanvasToImageView));
+        imagePane.heightProperty().addListener((obs, o, n) ->
+                javafx.application.Platform.runLater(this::syncCanvasToImageView));
 
         // Mouse handlers for crop rectangle drawing
         overlayCanvas.setOnMousePressed(e -> {
@@ -212,20 +225,9 @@ public class LabelExtractionDialog {
         try {
             Object img = imageData.getServer().getAssociatedImage(name);
             if (img instanceof BufferedImage) {
-                currentSourceImage = (BufferedImage) img;
+                currentSourceImage = LabelImageUtility.normalizeToEightBit((BufferedImage) img);
                 javafx.scene.image.Image fxImg = SwingFXUtils.toFXImage(currentSourceImage, null);
                 sourceView.setImage(fxImg);
-
-                // Resize overlay canvas to match displayed image
-                double dispW = sourceView.getBoundsInLocal().getWidth();
-                double dispH = sourceView.getBoundsInLocal().getHeight();
-                if (dispW > 0 && dispH > 0) {
-                    overlayCanvas.setWidth(dispW);
-                    overlayCanvas.setHeight(dispH);
-                } else {
-                    overlayCanvas.setWidth(sourceView.getFitWidth());
-                    overlayCanvas.setHeight(sourceView.getFitHeight());
-                }
 
                 // Clear crop
                 hasCrop = false;
@@ -234,9 +236,29 @@ public class LabelExtractionDialog {
                 cropInfoLabel.setText("Draw a rectangle on the image to define the label region");
                 logger.info("Loaded associated image '{}': {}x{}", name,
                         currentSourceImage.getWidth(), currentSourceImage.getHeight());
+
+                // Sync canvas size after layout completes (ImageView needs
+                // a layout pass to compute its actual displayed bounds)
+                javafx.application.Platform.runLater(this::syncCanvasToImageView);
             }
         } catch (Exception e) {
             logger.warn("Failed to load associated image '{}': {}", name, e.getMessage());
+        }
+    }
+
+    /** Resizes the overlay canvas to match the ImageView's actual displayed bounds. */
+    private void syncCanvasToImageView() {
+        if (currentSourceImage == null) return;
+        double dispW = sourceView.getBoundsInLocal().getWidth();
+        double dispH = sourceView.getBoundsInLocal().getHeight();
+        if (dispW <= 0 || dispH <= 0) {
+            dispW = sourceView.getFitWidth();
+            dispH = sourceView.getFitHeight();
+        }
+        overlayCanvas.setWidth(dispW);
+        overlayCanvas.setHeight(dispH);
+        if (hasCrop) {
+            drawStoredCropRect();
         }
     }
 

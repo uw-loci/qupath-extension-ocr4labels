@@ -416,9 +416,15 @@ public class LabelImageUtility {
                     source = source.getSubimage(cx, cy, cw, ch);
                     // getSubimage shares the raster; copy to independent image
                     BufferedImage cropped = new BufferedImage(cw, ch, BufferedImage.TYPE_INT_RGB);
-                    cropped.getGraphics().drawImage(source, 0, 0, null);
+                    java.awt.Graphics g = cropped.getGraphics();
+                    g.drawImage(source, 0, 0, null);
+                    g.dispose();
                     source = cropped;
                     logger.info("Cropped to ({},{} {}x{})", cx, cy, cw, ch);
+                } else {
+                    logger.warn("Crop region ({},{} {}x{}) outside source image ({}x{}), skipping crop",
+                            cx, cy, config.getCropWidth(), config.getCropHeight(),
+                            source.getWidth(), source.getHeight());
                 }
             }
 

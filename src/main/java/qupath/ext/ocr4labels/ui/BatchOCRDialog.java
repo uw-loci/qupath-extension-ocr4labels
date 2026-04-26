@@ -54,7 +54,7 @@ public class BatchOCRDialog {
     private final QuPathGUI qupath;
     private final Project<?> project;
     private final OCREngine ocrEngine;
-    private final List<ProjectImageEntry<?>> imagesWithLabels;
+    private List<ProjectImageEntry<?>> imagesWithLabels;
 
     private Stage stage;
     private OCRTemplate currentTemplate;
@@ -91,14 +91,37 @@ public class BatchOCRDialog {
     }
 
     private List<ProjectImageEntry<?>> findImagesWithLabels() {
+        return findImagesWithLabels(null);
+    }
+
+    /**
+     * Finds project images that have label images available.
+     * When an extraction config is provided, also includes images that
+     * have the referenced associated image (e.g., "macro") even if they
+     * lack a dedicated "label" image.
+     */
+    private List<ProjectImageEntry<?>> findImagesWithLabels(
+            qupath.ext.ocr4labels.model.LabelExtractionConfig extractionConfig) {
         List<ProjectImageEntry<?>> result = new ArrayList<>();
         if (project == null) return result;
+
+        String extractionSource = (extractionConfig != null)
+                ? extractionConfig.getSourceImageName() : null;
 
         for (ProjectImageEntry<?> entry : project.getImageList()) {
             try {
                 ImageData<?> imageData = entry.readImageData();
-                if (imageData != null && LabelImageUtility.isLabelImageAvailable(imageData)) {
+                if (imageData == null) continue;
+
+                if (LabelImageUtility.isLabelImageAvailable(imageData)) {
                     result.add(entry);
+                } else if (extractionSource != null) {
+                    // Check if this image has the extraction source (e.g., "macro")
+                    var names = imageData.getServer().getAssociatedImageList();
+                    if (names != null && names.stream()
+                            .anyMatch(n -> n.equalsIgnoreCase(extractionSource))) {
+                        result.add(entry);
+                    }
                 }
             } catch (Exception e) {
                 logger.debug("Could not check image for label: {}", entry.getImageName());
@@ -109,9 +132,10 @@ public class BatchOCRDialog {
 
     private void showDialog() {
         if (imagesWithLabels.isEmpty()) {
-            Dialogs.showWarningNotification("No Labels Found",
-                    "No images in the project have label images available.");
-            return;
+            // Don't block -- a template with extraction config may add images.
+            // The dialog will show an empty list until a template is loaded.
+            logger.info("No images with standard label images found. "
+                    + "Load a template with label extraction config to include macro images.");
         }
 
         stage = new Stage();
@@ -793,6 +817,20 @@ public class BatchOCRDialog {
             templateTable.setItems(FXCollections.observableArrayList(
                     currentTemplate.getFieldMappings()));
             processButton.setDisable(false);
+
+            // If template has extraction config, re-scan project to include
+            // images that have the referenced associated image (e.g., "macro")
+            if (currentTemplate.hasLabelExtraction()) {
+                imagesWithLabels = findImagesWithLabels(currentTemplate.getLabelExtraction());
+                logger.info("Re-scanned with extraction config '{}': {} images found",
+                        currentTemplate.getLabelExtraction().getSourceImageName(),
+                        imagesWithLabels.size());
+                // Refresh the results table entries
+                imageEntries.clear();
+                for (var entry : imagesWithLabels) {
+                    imageEntries.add(new ImageProcessingEntry(entry));
+                }
+            }
 
             // Update results table columns to match template fields
             updateResultsTableColumns();
