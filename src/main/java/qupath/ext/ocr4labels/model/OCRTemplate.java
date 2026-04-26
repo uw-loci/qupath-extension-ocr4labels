@@ -24,6 +24,7 @@ public class OCRTemplate {
     private String description;
     private List<FieldMapping> fieldMappings;
     private OCRConfiguration configuration;
+    private LabelExtractionConfig labelExtraction;
     private long createdTimestamp;
     private boolean useFixedPositions;
     private double dilationFactor = 1.2; // Default 20% dilation
@@ -289,6 +290,26 @@ public class OCRTemplate {
 
     public void setDilationFactor(double dilationFactor) {
         this.dilationFactor = dilationFactor;
+    }
+
+    /**
+     * Gets the label extraction configuration, or null if not set.
+     * When present, the extraction config is applied before OCR to
+     * crop/rotate/flip a region from the specified associated image.
+     */
+    public LabelExtractionConfig getLabelExtraction() {
+        return labelExtraction;
+    }
+
+    public void setLabelExtraction(LabelExtractionConfig labelExtraction) {
+        this.labelExtraction = labelExtraction;
+    }
+
+    /**
+     * Returns true if this template has a label extraction configuration.
+     */
+    public boolean hasLabelExtraction() {
+        return labelExtraction != null && labelExtraction.getSourceImageName() != null;
     }
 
     /**

@@ -375,4 +375,127 @@ public class LabelImageUtility {
 
         return normalized;
     }
+
+    /**
+     * Retrieves an associated image and applies the given extraction config
+     * (crop, rotate, flip) to produce a label image.
+     *
+     * @param imageData The ImageData containing the associated images
+     * @param config    The extraction configuration specifying source, crop, rotation, flip
+     * @return The extracted and transformed label image, or null on failure
+     */
+    public static BufferedImage retrieveImageWithExtraction(
+            ImageData<?> imageData,
+            qupath.ext.ocr4labels.model.LabelExtractionConfig config) {
+        if (imageData == null || config == null || config.getSourceImageName() == null) {
+            return null;
+        }
+
+        try {
+            ImageServer<?> server = imageData.getServer();
+            if (server == null) return null;
+
+            // Retrieve the named associated image
+            BufferedImage source = retrieveImageByName(server, config.getSourceImageName());
+            if (source == null) {
+                logger.warn("Associated image '{}' not found", config.getSourceImageName());
+                return null;
+            }
+
+            source = normalizeToEightBit(source);
+            logger.info("Retrieved '{}' for extraction: {}x{}",
+                    config.getSourceImageName(), source.getWidth(), source.getHeight());
+
+            // Crop
+            if (config.hasCropRegion()) {
+                int cx = Math.max(0, config.getCropX());
+                int cy = Math.max(0, config.getCropY());
+                int cw = Math.min(config.getCropWidth(), source.getWidth() - cx);
+                int ch = Math.min(config.getCropHeight(), source.getHeight() - cy);
+                if (cw > 0 && ch > 0) {
+                    source = source.getSubimage(cx, cy, cw, ch);
+                    // getSubimage shares the raster; copy to independent image
+                    BufferedImage cropped = new BufferedImage(cw, ch, BufferedImage.TYPE_INT_RGB);
+                    cropped.getGraphics().drawImage(source, 0, 0, null);
+                    source = cropped;
+                    logger.info("Cropped to ({},{} {}x{})", cx, cy, cw, ch);
+                }
+            }
+
+            // Rotate
+            int rot = config.getRotation();
+            if (rot == 90 || rot == 180 || rot == 270) {
+                source = rotateImage(source, rot);
+                logger.info("Rotated {} degrees", rot);
+            }
+
+            // Flip
+            if (config.isFlipHorizontal() || config.isFlipVertical()) {
+                source = flipImage(source, config.isFlipHorizontal(), config.isFlipVertical());
+                logger.info("Flipped H={} V={}", config.isFlipHorizontal(), config.isFlipVertical());
+            }
+
+            return source;
+
+        } catch (Exception e) {
+            logger.error("Failed to extract label from associated image: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Rotates a BufferedImage by 90, 180, or 270 degrees.
+     */
+    private static BufferedImage rotateImage(BufferedImage img, int degrees) {
+        int w = img.getWidth();
+        int h = img.getHeight();
+        boolean swap = (degrees == 90 || degrees == 270);
+        int newW = swap ? h : w;
+        int newH = swap ? w : h;
+
+        BufferedImage rotated = new BufferedImage(newW, newH, img.getType());
+        java.awt.Graphics2D g = rotated.createGraphics();
+        java.awt.geom.AffineTransform tx = new java.awt.geom.AffineTransform();
+
+        if (degrees == 90) {
+            tx.translate(h, 0);
+            tx.rotate(Math.PI / 2);
+        } else if (degrees == 180) {
+            tx.translate(w, h);
+            tx.rotate(Math.PI);
+        } else if (degrees == 270) {
+            tx.translate(0, w);
+            tx.rotate(-Math.PI / 2);
+        }
+
+        g.drawImage(img, tx, null);
+        g.dispose();
+        return rotated;
+    }
+
+    /**
+     * Flips a BufferedImage horizontally and/or vertically.
+     */
+    private static BufferedImage flipImage(BufferedImage img, boolean horizontal, boolean vertical) {
+        int w = img.getWidth();
+        int h = img.getHeight();
+        BufferedImage flipped = new BufferedImage(w, h, img.getType());
+        java.awt.Graphics2D g = flipped.createGraphics();
+        java.awt.geom.AffineTransform tx = new java.awt.geom.AffineTransform();
+
+        if (horizontal && vertical) {
+            tx.translate(w, h);
+            tx.scale(-1, -1);
+        } else if (horizontal) {
+            tx.translate(w, 0);
+            tx.scale(-1, 1);
+        } else if (vertical) {
+            tx.translate(0, h);
+            tx.scale(1, -1);
+        }
+
+        g.drawImage(img, tx, null);
+        g.dispose();
+        return flipped;
+    }
 }

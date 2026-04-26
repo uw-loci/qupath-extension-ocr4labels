@@ -937,7 +937,20 @@ public class BatchOCRDialog {
                 return;
             }
 
-            BufferedImage labelImage = LabelImageUtility.retrieveLabelImage(imageData);
+            // Try label extraction config from template first, then standard lookup
+            BufferedImage labelImage = null;
+            if (currentTemplate != null && currentTemplate.hasLabelExtraction()) {
+                labelImage = LabelImageUtility.retrieveImageWithExtraction(
+                        imageData, currentTemplate.getLabelExtraction());
+                if (labelImage != null) {
+                    logger.debug("Extracted label from '{}' for {}",
+                            currentTemplate.getLabelExtraction().getSourceImageName(),
+                            entry.getImageName());
+                }
+            }
+            if (labelImage == null) {
+                labelImage = LabelImageUtility.retrieveLabelImage(imageData);
+            }
             if (labelImage == null) {
                 entry.setStatus("No label");
                 entry.setFieldsFound("N/A");

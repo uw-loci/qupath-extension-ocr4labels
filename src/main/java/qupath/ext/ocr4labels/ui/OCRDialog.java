@@ -79,6 +79,7 @@ public class OCRDialog {
     // Current state
     private ProjectImageEntry<?> selectedEntry;
     private BufferedImage labelImage;
+    private qupath.ext.ocr4labels.model.LabelExtractionConfig labelExtractionConfig;
 
     private Stage stage;
     private ImageView imageView;
@@ -419,6 +420,32 @@ public class OCRDialog {
                 "Helps with faded labels or poor lighting.\n" +
                 "Usually best to leave enabled."));
 
+        // Label source configuration button
+        Button labelSourceBtn = new Button("Label Source...");
+        labelSourceBtn.setTooltip(new Tooltip(
+                "Configure how to extract a label from an associated image.\n\n"
+                + "Use this when slides have no dedicated 'label' image but\n"
+                + "have a 'macro' image that contains the label region.\n"
+                + "Define a crop area, rotation, and flip to extract the label."));
+        labelSourceBtn.setOnAction(e -> {
+            ProjectImageEntry<?> currentEntry = entryListView.getSelectionModel().getSelectedItem();
+            if (currentEntry == null) return;
+            try {
+                ImageData<?> iData = currentEntry.readImageData();
+                LabelExtractionDialog extractionDialog = new LabelExtractionDialog(iData);
+                java.util.Optional<qupath.ext.ocr4labels.model.LabelExtractionConfig> result =
+                        extractionDialog.showAndWait(labelExtractionConfig);
+                result.ifPresent(config -> {
+                    labelExtractionConfig = config;
+                    logger.info("Label extraction configured: {}", config);
+                    // Reload the current entry with the new extraction config
+                    loadLabelImageForEntry(currentEntry);
+                });
+            } catch (Exception ex) {
+                logger.error("Failed to open label source dialog: {}", ex.getMessage(), ex);
+            }
+        });
+
         // Keep reference for backward compatibility
         runOCRButton = scanButton;
 
@@ -447,7 +474,9 @@ public class OCRDialog {
                 confSlider,
                 confValue,
                 invertCheckBox,
-                thresholdCheckBox
+                thresholdCheckBox,
+                new Separator(),
+                labelSourceBtn
         );
     }
 
@@ -598,7 +627,26 @@ public class OCRDialog {
     private void loadLabelImageForEntry(ProjectImageEntry<?> entry) {
         try {
             ImageData<?> imageData = entry.readImageData();
-            if (imageData != null && LabelImageUtility.isLabelImageAvailable(imageData)) {
+            if (imageData == null) {
+                labelImage = null;
+                showNoLabelPlaceholder();
+                return;
+            }
+
+            // Try label extraction config first (for macro images without dedicated labels)
+            if (labelExtractionConfig != null) {
+                labelImage = LabelImageUtility.retrieveImageWithExtraction(
+                        imageData, labelExtractionConfig);
+                if (labelImage != null) {
+                    logger.info("Loaded label via extraction config from '{}'",
+                            labelExtractionConfig.getSourceImageName());
+                    updateImageDisplay();
+                    return;
+                }
+            }
+
+            // Fall back to standard keyword-based lookup
+            if (LabelImageUtility.isLabelImageAvailable(imageData)) {
                 labelImage = LabelImageUtility.retrieveLabelImage(imageData);
                 updateImageDisplay();
             } else {
@@ -2682,6 +2730,11 @@ public class OCRDialog {
         template.setUseFixedPositions(true);
         template.setDilationFactor(1.2); // 20% dilation
 
+        // Include label extraction config if set
+        if (labelExtractionConfig != null) {
+            template.setLabelExtraction(labelExtractionConfig);
+        }
+
         try {
             template.saveToFile(file);
             currentTemplate = template;
@@ -2726,6 +2779,17 @@ public class OCRDialog {
 
         try {
             currentTemplate = OCRTemplate.loadFromFile(file);
+
+            // Restore label extraction config from template
+            if (currentTemplate.hasLabelExtraction()) {
+                labelExtractionConfig = currentTemplate.getLabelExtraction();
+                logger.info("Template has label extraction config: {}", labelExtractionConfig);
+                // Reload current entry with extraction config
+                ProjectImageEntry<?> currentEntry = entryListView.getSelectionModel().getSelectedItem();
+                if (currentEntry != null) {
+                    loadLabelImageForEntry(currentEntry);
+                }
+            }
 
             // Update UI to show template info
             useFixedPositionsCheckBox.setDisable(!currentTemplate.hasBoundingBoxData());
