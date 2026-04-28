@@ -894,6 +894,10 @@ For natural text (not scientific codes), enable **OCR weights** checkbox before 
 
 The extension JAR will be created in `build/libs/`.
 
+## Support
+
+For general support and feature requests, please post on the [image.sc forum](https://forum.image.sc/) with the `#qupath` tag and mention `@Mike_Nelson` to flag the topic for my attention.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
