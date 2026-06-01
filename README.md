@@ -145,6 +145,8 @@ Region types are color-coded on the overlay:
 
 ## OCR Dialog Reference
 
+![OCR for Labels Configure Fields dialog: a project image list on the left, a label image with detected text outlined in green ("Peg-FUD D", "HE", "010", "UWCCC"), and a Detected Fields table mapping each detected text to a metadata key with a confidence percentage. Toolbar shows Scan, Decode As, Mode (Sparse Text), and Min Conf controls.](images/ocr-dialog-configure-fields.png)
+
 ### Toolbar Controls
 
 | Control | Description |
