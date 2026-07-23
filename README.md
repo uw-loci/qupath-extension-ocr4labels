@@ -18,7 +18,7 @@ A QuPath extension that performs OCR (Optical Character Recognition) and barcode
 
 ## Requirements
 
-- QuPath 0.6.0 or later
+- QuPath 0.7.0 or later
 - Java 21+
 - Tesseract language data files (see [Setup](#setup))
 
