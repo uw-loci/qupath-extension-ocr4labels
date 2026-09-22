@@ -33,6 +33,8 @@ public class OCRPreferences {
     private static final boolean DEFAULT_DETECT_ORIENTATION = true;
     // Auto reads the lab's slide labels; Sparse Text (the previous default) misses them.
     private static final int DEFAULT_PAGE_SEG_MODE = OCRConfiguration.PageSegMode.AUTO.getValue();
+    // Bump when the page segmentation default changes again so stale stored values migrate once.
+    private static final int PAGE_SEG_MODE_DEFAULT_VERSION = 1;
     private static final String DEFAULT_METADATA_PREFIX = "OCR_";
     private static final String DEFAULT_LABEL_IMAGE_KEYWORDS = "label,barcode";
     private static final boolean DEFAULT_AUTO_RUN_ON_ENTRY_SWITCH = true;
@@ -89,6 +91,7 @@ public class OCRPreferences {
 
         pageSegModeProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "pageSegMode", DEFAULT_PAGE_SEG_MODE);
+        migratePageSegModeDefault();
 
         metadataPrefixProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "metadataPrefix", DEFAULT_METADATA_PREFIX);
@@ -110,6 +113,25 @@ public class OCRPreferences {
                 PREFIX + "dialogHeight", 700.0);
 
         logger.info("OCR for Labels preferences installed");
+    }
+
+    /**
+     * Moves a persisted Sparse Text mode to Auto once. Sparse Text was the imposed
+     * default before 0.4.3 and the old Settings dialog wrote it back on open, so a
+     * stored 11 is a leftover, not a choice. Runs once per install; later choices stick.
+     */
+    private static void migratePageSegModeDefault() {
+        IntegerProperty migration = PathPrefs.createPersistentPreference(
+                PREFIX + "pageSegModeDefaultVersion", 0);
+        if (migration.get() >= PAGE_SEG_MODE_DEFAULT_VERSION) {
+            return;
+        }
+        if (pageSegModeProperty.get() == OCRConfiguration.PageSegMode.SPARSE_TEXT.getValue()) {
+            pageSegModeProperty.set(DEFAULT_PAGE_SEG_MODE);
+            logger.info("OCR page segmentation mode moved from Sparse Text to Auto (new default); "
+                    + "pick Sparse Text again in Settings if you prefer it");
+        }
+        migration.set(PAGE_SEG_MODE_DEFAULT_VERSION);
     }
 
     // === Property accessors ===
