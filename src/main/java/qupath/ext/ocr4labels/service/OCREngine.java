@@ -85,9 +85,9 @@ public class OCREngine {
                         "Download from https://github.com/tesseract-ocr/tessdata_fast/raw/main/osd.traineddata");
             }
 
-            // Default settings optimized for label images - use Sparse Text mode
+            // Defaults; every call site overrides these from its OCRConfiguration
             tesseract.setOcrEngineMode(ITessAPI.TessOcrEngineMode.OEM_LSTM_ONLY);
-            tesseract.setPageSegMode(ITessAPI.TessPageSegMode.PSM_SPARSE_TEXT);
+            tesseract.setPageSegMode(ITessAPI.TessPageSegMode.PSM_AUTO);
 
             initialized = true;
             logger.info("OCR engine initialized with tessdata: {}, language: {}, OSD available: {}",

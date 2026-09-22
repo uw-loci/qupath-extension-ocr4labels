@@ -423,18 +423,18 @@ public class OCRDialog {
 
         // === OCR SETTINGS SECTION ===
 
-        // PSM Mode dropdown - Sparse Text is best default for slide labels
+        // PSM Mode dropdown - shares its list and persisted value with the Settings dialog
         Label psmLabel = new Label("Mode:");
         psmLabel.setTooltip(new Tooltip("OCR text detection mode"));
         psmCombo = new ComboBox<>();
         psmCombo.getItems().addAll(PSMOption.values());
-        psmCombo.setValue(PSMOption.SPARSE_TEXT);
-        psmCombo.setTooltip(new Tooltip(
-                "OCR text detection mode:\n\n" +
-                "Sparse Text: Best for labels - finds text scattered across the image\n" +
-                "Single Block: For labels with one paragraph of text\n" +
-                "Single Line/Word: For very simple labels\n\n" +
-                "Only affects text decoding, not barcode scanning."));
+        psmCombo.setValue(PSMOption.fromPreference());
+        psmCombo.setTooltip(new Tooltip(PSMOption.TOOLTIP));
+        psmCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
+            if (newMode != null) {
+                OCRPreferences.setPageSegMode(newMode.getMode());
+            }
+        });
 
         // Confidence slider
         Label confLabel = new Label("Min Conf:");
@@ -2489,6 +2489,7 @@ public class OCRDialog {
         final int offsetY = imgY;
         final BufferedImage finalRegionImage = regionImage;
         final RegionType finalType = selectedType;
+        final PSMOption selectedPSM = psmCombo.getValue();
 
         // Use unified decoding based on selected type
         if (finalType == RegionType.BARCODE) {
@@ -2525,7 +2526,7 @@ public class OCRDialog {
         } else if (finalType == RegionType.AUTO) {
             // AUTO mode: try barcode first, fall back to OCR
             OCRConfiguration config = OCRConfiguration.builder()
-                    .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+                    .pageSegMode(selectedPSM != null ? selectedPSM.getMode() : OCRConfiguration.PageSegMode.AUTO)
                     .language(OCRPreferences.getLanguage())
                     .minConfidence(0.1)
                     .autoRotate(OCRPreferences.isAutoRotate())
@@ -2569,7 +2570,7 @@ public class OCRDialog {
         } else {
             // TEXT mode: use OCR as before
             OCRConfiguration config = OCRConfiguration.builder()
-                    .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+                    .pageSegMode(selectedPSM != null ? selectedPSM.getMode() : OCRConfiguration.PageSegMode.AUTO)
                     .language(OCRPreferences.getLanguage())
                     .minConfidence(0.1)
                     .autoRotate(OCRPreferences.isAutoRotate())
@@ -4084,36 +4085,6 @@ public class OCRDialog {
                 setGraphic(comboBox);
                 setText(null);
             }
-        }
-    }
-
-    /**
-     * User-friendly PSM options for the dropdown.
-     */
-    public enum PSMOption {
-        AUTO("Auto (default)", OCRConfiguration.PageSegMode.AUTO),
-        AUTO_OSD("Auto + Orientation", OCRConfiguration.PageSegMode.AUTO_OSD),
-        SINGLE_BLOCK("Single Block", OCRConfiguration.PageSegMode.SINGLE_BLOCK),
-        SINGLE_LINE("Single Line", OCRConfiguration.PageSegMode.SINGLE_LINE),
-        SINGLE_WORD("Single Word", OCRConfiguration.PageSegMode.SINGLE_WORD),
-        SPARSE_TEXT("Sparse Text", OCRConfiguration.PageSegMode.SPARSE_TEXT),
-        SPARSE_TEXT_OSD("Sparse + Orientation", OCRConfiguration.PageSegMode.SPARSE_TEXT_OSD);
-
-        private final String displayName;
-        private final OCRConfiguration.PageSegMode mode;
-
-        PSMOption(String displayName, OCRConfiguration.PageSegMode mode) {
-            this.displayName = displayName;
-            this.mode = mode;
-        }
-
-        public OCRConfiguration.PageSegMode getMode() {
-            return mode;
-        }
-
-        @Override
-        public String toString() {
-            return displayName;
         }
     }
 }

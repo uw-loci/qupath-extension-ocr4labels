@@ -56,7 +56,7 @@ public class OCRBuilder {
 
     private static final Logger logger = LoggerFactory.getLogger(OCRBuilder.class);
 
-    private OCRConfiguration.PageSegMode pageSegMode = OCRConfiguration.PageSegMode.SPARSE_TEXT;
+    private OCRConfiguration.PageSegMode pageSegMode = OCRConfiguration.PageSegMode.AUTO;
     private String language;
     private double minConfidence = 0.5;
     private boolean enhanceContrast = true;
@@ -71,7 +71,7 @@ public class OCRBuilder {
 
     /**
      * Creates a new builder with default settings.
-     * Default: sparse text mode, enhanced contrast, 50% min confidence.
+     * Default: auto page segmentation, enhanced contrast, 50% min confidence.
      */
     public OCRBuilder() {
         // Load defaults from preferences
@@ -84,7 +84,6 @@ public class OCRBuilder {
 
     /**
      * Use sparse text mode - finds text scattered across the image.
-     * This is the best mode for label images (default).
      *
      * @return this builder
      */
@@ -94,7 +93,7 @@ public class OCRBuilder {
     }
 
     /**
-     * Use automatic page segmentation mode.
+     * Use automatic page segmentation mode (default).
      * Tesseract automatically determines text layout.
      *
      * @return this builder
@@ -151,7 +150,7 @@ public class OCRBuilder {
      * @return this builder
      */
     public OCRBuilder pageSegMode(OCRConfiguration.PageSegMode mode) {
-        this.pageSegMode = mode != null ? mode : OCRConfiguration.PageSegMode.SPARSE_TEXT;
+        this.pageSegMode = mode != null ? mode : OCRConfiguration.PageSegMode.AUTO;
         return this;
     }
 

@@ -208,12 +208,12 @@ the wrong way.
 
 | Mode | Best For |
 |------|----------|
-| **Auto** | General purpose, lets Tesseract decide |
+| **Auto** | Lets Tesseract work out the layout (default) |
 | **Auto + Orientation** | Auto mode with rotation detection |
 | **Single Block** | Labels with one block of text |
 | **Single Line** | Single-line text like serial numbers |
 | **Single Word** | Individual words or short codes |
-| **Sparse Text** | Labels with scattered text at various positions (recommended) |
+| **Sparse Text** | Labels with scattered text at various positions |
 | **Sparse + Orientation** | Sparse text with rotation detection |
 
 ### Image Panel
@@ -647,7 +647,7 @@ def labelImage = LabelImageUtility.retrieveLabelImage(imageData)
 // Configure OCR
 def config = OCRConfiguration.builder()
     .language("eng")
-    .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+    .pageSegMode(OCRConfiguration.PageSegMode.AUTO)
     .minConfidence(0.5)
     .enhanceContrast(true)
     .build()
@@ -753,7 +753,7 @@ def entry = project.getEntry(imageData)
 def labelImage = LabelImageUtility.retrieveLabelImage(imageData)
 def config = OCRConfiguration.builder()
     .language("eng")
-    .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+    .pageSegMode(OCRConfiguration.PageSegMode.AUTO)
     .minConfidence(0.5)
     .build()
 
@@ -793,7 +793,7 @@ import java.awt.Rectangle
 // Configuration
 def config = OCRConfiguration.builder()
     .language("eng")
-    .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+    .pageSegMode(OCRConfiguration.PageSegMode.AUTO)
     .minConfidence(0.5)
     .build()
 
@@ -1101,7 +1101,7 @@ For natural text (not scientific codes), enable **OCR weights** checkbox before 
 
 ### No text detected
 
-- Try different **Mode** settings (Sparse Text often works best)
+- Try different **Mode** settings (start with Auto, then Sparse Text for widely scattered text)
 - Lower the **Min Conf** slider
 - Enable **Enhance** for faded labels
 - Check **Invert** for light-on-dark text

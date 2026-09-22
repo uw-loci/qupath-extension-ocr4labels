@@ -359,9 +359,7 @@ public class OCRController {
                 .enhanceContrast(OCRPreferences.isEnhanceContrast())
                 .detectOrientation(OCRPreferences.isDetectOrientation())
                 .literalText(OCRPreferences.isLiteralText())
-                .pageSegMode(OCRConfiguration.PageSegMode.values()[
-                        Math.min(OCRPreferences.getPageSegMode(),
-                                OCRConfiguration.PageSegMode.values().length - 1)])
+                .pageSegMode(OCRPreferences.getPageSegMode())
                 .build();
     }
 

@@ -320,26 +320,14 @@ public class OCRSettingsDialog {
                 "How the OCR engine looks for text on your label.\n" +
                 "Different modes work better for different label layouts."));
 
-        ComboBox<String> psmCombo = new ComboBox<>();
-        psmCombo.getItems().addAll(
-                "Sparse text (recommended for labels)",
-                "Auto detect",
-                "Single text block",
-                "Single line",
-                "Single word"
-        );
-        psmCombo.setTooltip(new Tooltip(
-                "Sparse text: Best for labels with scattered text in different areas\n" +
-                "Auto detect: Let the system guess the best mode\n" +
-                "Single block: For labels with one paragraph of text\n" +
-                "Single line: For labels with just one line of text\n" +
-                "Single word: For labels with just one word"));
-
-        int currentPsm = OCRPreferences.getPageSegMode();
-        psmCombo.getSelectionModel().select(psmToIndex(currentPsm));
-        psmCombo.setOnAction(e -> {
-            int idx = psmCombo.getSelectionModel().getSelectedIndex();
-            OCRPreferences.setPageSegMode(indexToPsm(idx));
+        ComboBox<PSMOption> psmCombo = new ComboBox<>();
+        psmCombo.getItems().addAll(PSMOption.values());
+        psmCombo.setTooltip(new Tooltip(PSMOption.TOOLTIP));
+        psmCombo.setValue(PSMOption.fromPreference());
+        psmCombo.valueProperty().addListener((obs, oldMode, newMode) -> {
+            if (newMode != null) {
+                OCRPreferences.setPageSegMode(newMode.getMode());
+            }
         });
 
         // Minimum Confidence
@@ -513,34 +501,5 @@ public class OCRSettingsDialog {
                     "Could not open the download link.\n\n" +
                     "Please manually visit:\n" + url);
         }
-    }
-
-    /**
-     * Converts PSM value to combo box index.
-     * Now defaults to Sparse Text (index 0).
-     */
-    private static int psmToIndex(int psm) {
-        return switch (psm) {
-            case 11 -> 0; // SPARSE_TEXT (recommended)
-            case 3 -> 1;  // AUTO
-            case 6 -> 2;  // SINGLE_BLOCK
-            case 7 -> 3;  // SINGLE_LINE
-            case 8 -> 4;  // SINGLE_WORD
-            default -> 0; // Default to sparse text
-        };
-    }
-
-    /**
-     * Converts combo box index to PSM value.
-     */
-    private static int indexToPsm(int index) {
-        return switch (index) {
-            case 0 -> 11; // SPARSE_TEXT (recommended)
-            case 1 -> 3;  // AUTO
-            case 2 -> 6;  // SINGLE_BLOCK
-            case 3 -> 7;  // SINGLE_LINE
-            case 4 -> 8;  // SINGLE_WORD
-            default -> 11; // Default to sparse text
-        };
     }
 }

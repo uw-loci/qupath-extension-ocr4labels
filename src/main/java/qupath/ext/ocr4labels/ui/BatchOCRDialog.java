@@ -724,7 +724,7 @@ public class BatchOCRDialog {
         new Thread(() -> {
             try {
                 OCRConfiguration config = OCRConfiguration.builder()
-                        .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+                        .pageSegMode(OCRPreferences.getPageSegMode())
                         .language(OCRPreferences.getLanguage())
                         .minConfidence(OCRPreferences.getMinConfidence())
                         .enhanceContrast(OCRPreferences.isEnhanceContrast())
@@ -927,7 +927,7 @@ public class BatchOCRDialog {
             OCRConfiguration config = currentTemplate.getConfiguration();
             if (config == null) {
                 config = OCRConfiguration.builder()
-                        .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+                        .pageSegMode(OCRPreferences.getPageSegMode())
                         .language(OCRPreferences.getLanguage())
                         .minConfidence(OCRPreferences.getMinConfidence())
                         .enhanceContrast(OCRPreferences.isEnhanceContrast())

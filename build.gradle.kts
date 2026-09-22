@@ -11,7 +11,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-ocr4labels"
     group = "io.github.uw-loci"
-    version = "0.4.2"
+    version = "0.4.3"
     description = "A QuPath extension for OCR on slide label images with metadata extraction."
     automaticModule = "io.github.uw-loci.extension.ocr4labels"
 }

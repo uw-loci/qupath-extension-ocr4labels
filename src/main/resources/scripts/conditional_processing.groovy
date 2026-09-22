@@ -54,8 +54,8 @@ if (imageName.contains("_simple_")) {
     println "  Using single block mode"
     builder.singleBlock()
 } else {
-    // Default: scattered text on label
-    builder.sparseText()
+    // Default: let Tesseract work out the layout
+    builder.autoDetect()
 }
 
 // Always use enhancement

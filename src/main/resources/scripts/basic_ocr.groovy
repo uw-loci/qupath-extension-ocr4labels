@@ -17,9 +17,9 @@ if (!OCR4Labels.hasLabelImage()) {
 
 println "Processing: " + OCR4Labels.getCurrentImageName()
 
-// Run OCR with default settings (sparse text mode, enhanced contrast)
+// Run OCR with default settings (auto page segmentation, enhanced contrast)
 def results = OCR4Labels.builder()
-    .sparseText()
+    .autoDetect()
     .enhance()
     .minConfidence(0.5)
     .run()

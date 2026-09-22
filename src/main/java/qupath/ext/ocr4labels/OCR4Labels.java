@@ -336,7 +336,7 @@ public class OCR4Labels {
 
     private static OCRConfiguration getDefaultConfiguration() {
         return OCRConfiguration.builder()
-                .pageSegMode(OCRConfiguration.PageSegMode.SPARSE_TEXT)
+                .pageSegMode(OCRConfiguration.PageSegMode.AUTO)
                 .enhanceContrast(true)
                 .minConfidence(0.5)
                 .language(OCRPreferences.getLanguage())

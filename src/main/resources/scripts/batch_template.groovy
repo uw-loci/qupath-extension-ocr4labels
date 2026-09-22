@@ -29,7 +29,7 @@ if (!OCR4Labels.hasLabelImage()) {
 // Adjust these settings based on your test results
 
 def results = OCR4Labels.builder()
-    .sparseText()           // Best for scattered text on labels
+    .autoDetect()           // Default; try .sparseText() for widely scattered text
     .enhance()              // Improve contrast
     // .invert()            // Uncomment for dark backgrounds
     .minConfidence(0.5)     // Adjust if missing text (lower) or too much noise (higher)

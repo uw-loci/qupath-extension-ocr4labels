@@ -1,5 +1,7 @@
 package qupath.ext.ocr4labels.preferences;
 
+import qupath.ext.ocr4labels.model.OCRConfiguration;
+
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
@@ -29,7 +31,8 @@ public class OCRPreferences {
     // labels it was meant for. See OCREngine.applyAdaptiveThreshold.
     private static final boolean DEFAULT_ENHANCE_CONTRAST = false;
     private static final boolean DEFAULT_DETECT_ORIENTATION = true;
-    private static final int DEFAULT_PAGE_SEG_MODE = 11; // PSM_SPARSE_TEXT (best for labels)
+    // Auto reads the lab's slide labels; Sparse Text (the previous default) misses them.
+    private static final int DEFAULT_PAGE_SEG_MODE = OCRConfiguration.PageSegMode.AUTO.getValue();
     private static final String DEFAULT_METADATA_PREFIX = "OCR_";
     private static final String DEFAULT_LABEL_IMAGE_KEYWORDS = "label,barcode";
     private static final boolean DEFAULT_AUTO_RUN_ON_ENTRY_SWITCH = true;
@@ -236,13 +239,14 @@ public class OCRPreferences {
         }
     }
 
-    public static int getPageSegMode() {
-        return pageSegModeProperty != null ? pageSegModeProperty.get() : DEFAULT_PAGE_SEG_MODE;
+    public static OCRConfiguration.PageSegMode getPageSegMode() {
+        int value = pageSegModeProperty != null ? pageSegModeProperty.get() : DEFAULT_PAGE_SEG_MODE;
+        return OCRConfiguration.PageSegMode.fromValue(value);
     }
 
-    public static void setPageSegMode(int mode) {
+    public static void setPageSegMode(OCRConfiguration.PageSegMode mode) {
         if (pageSegModeProperty != null) {
-            pageSegModeProperty.set(mode);
+            pageSegModeProperty.set((mode != null ? mode : OCRConfiguration.PageSegMode.AUTO).getValue());
         }
     }
 
@@ -314,7 +318,7 @@ public class OCRPreferences {
         setAutoRotate(DEFAULT_AUTO_ROTATE);
         setEnhanceContrast(DEFAULT_ENHANCE_CONTRAST);
         setDetectOrientation(DEFAULT_DETECT_ORIENTATION);
-        setPageSegMode(DEFAULT_PAGE_SEG_MODE);
+        setPageSegMode(OCRConfiguration.PageSegMode.fromValue(DEFAULT_PAGE_SEG_MODE));
         setMetadataPrefix(DEFAULT_METADATA_PREFIX);
         setLabelImageKeywords(DEFAULT_LABEL_IMAGE_KEYWORDS);
         setLiteralText(DEFAULT_LITERAL_TEXT);

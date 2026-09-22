@@ -18,7 +18,7 @@ println "Processing: ${imageName}"
 
 // Run OCR
 def results = OCR4Labels.builder()
-    .sparseText()
+    .autoDetect()
     .enhance()
     .minConfidence(0.5)
     .run()

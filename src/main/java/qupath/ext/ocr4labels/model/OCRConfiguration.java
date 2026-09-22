@@ -49,6 +49,19 @@ public class OCRConfiguration {
         public int getValue() {
             return value;
         }
+
+        /**
+         * @param value a Tesseract page segmentation mode number
+         * @return the matching mode, or {@link #AUTO} if the number is unknown
+         */
+        public static PageSegMode fromValue(int value) {
+            for (PageSegMode mode : values()) {
+                if (mode.value == value) {
+                    return mode;
+                }
+            }
+            return AUTO;
+        }
     }
 
     /**
