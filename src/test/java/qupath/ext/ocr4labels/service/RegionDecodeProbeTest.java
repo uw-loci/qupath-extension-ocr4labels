@@ -67,6 +67,82 @@ class RegionDecodeProbeTest {
         }
     }
 
+    /** Full-image Scan, as the dialog runs it, on the image named by PROBE_IMAGE. */
+    @Test
+    @EnabledIfEnvironmentVariable(named = "PROBE_IMAGE", matches = ".+")
+    void fullImageProbe() throws Exception {
+        OCREngine engine = new OCREngine();
+        engine.initialize(System.getenv("OCR4LABELS_TESSDATA"), "eng");
+        BufferedImage img = qupath.ext.ocr4labels.utilities.LabelImageUtility.normalizeToEightBit(
+                javax.imageio.ImageIO.read(new java.io.File(System.getenv("PROBE_IMAGE"))));
+        if (System.getenv("PROBE_SAVE") != null) {
+            javax.imageio.ImageIO.write(img, "png", new java.io.File(System.getenv("PROBE_SAVE")));
+        }
+        for (String psmName : System.getenv().getOrDefault("PROBE_PSMS", "AUTO").split(",")) {
+            OCRConfiguration config = OCRConfiguration.builder()
+                    .pageSegMode(OCRConfiguration.PageSegMode.valueOf(psmName)).language("eng")
+                    .minConfidence(Double.parseDouble(System.getenv().getOrDefault("PROBE_MINCONF", "0.5")))
+                    .autoRotate(true).detectOrientation(true).enhanceContrast(false)
+                    .enablePreprocessing(true).literalText(true).build();
+            var result = engine.processImage(img, config);
+            for (var b : result.getTextBlocks()) {
+                System.out.printf("FULL psm=%s %s [%s] conf=%.2f box=%s%n", psmName, b.getType(), b.getText(),
+                        b.getConfidence(), b.getBoundingBox());
+            }
+        }
+    }
+
+    /** A drawn region (PROBE_REGION=x,y,w,h) on PROBE_IMAGE, cropped as the dialog does. */
+    @Test
+    @EnabledIfEnvironmentVariable(named = "PROBE_REGION", matches = ".+")
+    void drawnRegionProbe() throws Exception {
+        OCREngine engine = new OCREngine();
+        engine.initialize(System.getenv("OCR4LABELS_TESSDATA"), "eng");
+        UnifiedDecoderService decoder = new UnifiedDecoderService(engine);
+        BufferedImage label = qupath.ext.ocr4labels.utilities.LabelImageUtility.normalizeToEightBit(
+                javax.imageio.ImageIO.read(new java.io.File(System.getenv("PROBE_IMAGE"))));
+        String[] p = System.getenv("PROBE_REGION").split(",");
+        java.awt.Rectangle drawn = new java.awt.Rectangle(Integer.parseInt(p[0]), Integer.parseInt(p[1]),
+                Integer.parseInt(p[2]), Integer.parseInt(p[3]));
+        boolean old = System.getenv("PROBE_OLD") != null;
+        java.awt.Rectangle snapped = old ? drawn
+                : qupath.ext.ocr4labels.utilities.RegionCrop.snapToInk(label, drawn, false);
+        for (RegionType type : new RegionType[] {RegionType.TEXT, RegionType.AUTO}) {
+          for (double mf : new double[] {0.1, 0.25, 0.4}) {
+            int[] m = new int[] {(int) Math.round(snapped.height * mf), (int) Math.round(snapped.height * mf)};
+            if (old) {
+                double d = type == RegionType.TEXT ? 0.15 : 0.25;
+                m = new int[] {(int) Math.round(snapped.width * d / 2), (int) Math.round(snapped.height * d / 2)};
+            }
+            java.awt.Rectangle box = new java.awt.Rectangle(snapped.x - m[0], snapped.y - m[1],
+                    snapped.width + 2 * m[0], snapped.height + 2 * m[1])
+                    .intersection(new java.awt.Rectangle(0, 0, label.getWidth(), label.getHeight()));
+            BufferedImage crop = label.getSubimage(box.x, box.y, box.width, box.height);
+            int[] q = qupath.ext.ocr4labels.utilities.RegionCrop.quietBorder(crop.getWidth(), crop.getHeight(), type);
+            if (old) {
+                int pad = Math.max(8, Math.round(crop.getHeight() * 0.2f));
+                q = new int[] {pad, pad};
+            }
+            BufferedImage padded = new BufferedImage(crop.getWidth() + 2 * q[0], crop.getHeight() + 2 * q[1],
+                    BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = padded.createGraphics();
+            g.setColor(old ? Color.WHITE : new Color(qupath.ext.ocr4labels.utilities.RegionCrop.backgroundRgb(crop)));
+            g.fillRect(0, 0, padded.getWidth(), padded.getHeight());
+            g.drawImage(crop, q[0], q[1], null);
+            g.dispose();
+            for (String psmName : System.getenv().getOrDefault("PROBE_PSMS", "AUTO").split(",")) {
+                OCRConfiguration config = OCRConfiguration.builder()
+                        .pageSegMode(OCRConfiguration.PageSegMode.valueOf(psmName)).language("eng")
+                        .minConfidence(0.1).autoRotate(true).detectOrientation(true)
+                        .enhanceContrast(false).enablePreprocessing(true).literalText(true).build();
+                var r = decoder.decodeRegion(padded, null, type, config);
+                System.out.printf("DRAWN %s drawn=%s type=%s margin=%.2f -> [%s] conf=%.2f%n", old ? "OLD" : "NEW",
+                        drawn, type, mf, r.getText(), r.getConfidence());
+            }
+          }
+        }
+    }
+
     @Test
     void noisyProbe() throws Exception {
         OCREngine engine = new OCREngine();

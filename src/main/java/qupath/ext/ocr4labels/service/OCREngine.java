@@ -754,7 +754,11 @@ public class OCREngine {
             if (dedupedLines.size() < lineBlocks.size()) {
                 logger.info("Deduplicated LINE blocks: {} -> {}", lineBlocks.size(), dedupedLines.size());
             }
-            blocks.addAll(dedupedLines);
+            List<TextBlock> splitLines = LineSplitter.split(dedupedLines, new ArrayList<>(blocks));
+            if (splitLines.size() > dedupedLines.size()) {
+                logger.info("Split LINE blocks at column gaps: {} -> {}", dedupedLines.size(), splitLines.size());
+            }
+            blocks.addAll(splitLines);
         } catch (Exception e) {
             logger.debug("Could not extract lines: {}", e.getMessage());
         }

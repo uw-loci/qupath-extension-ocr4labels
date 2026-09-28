@@ -99,8 +99,9 @@ You can define template regions manually without scanning, which is useful when 
 
 However you draw it, the rectangle shrinks to the text inside it (it never grows past
 what you drew), so a loose box and a tight one read the same. Leave some slack rather than
-drawing right against the letters. Add Field, Add Region and Draw Region all crop a region
-the same way before reading it.
+drawing right against the letters. Add Field and Draw Region crop a region the same way
+before reading it, and read it three times with slightly different margins around the text,
+keeping the most confident result: on a real label no single margin read every field.
 
 Alternatively, work in the other direction: click **Add Field** to create the row first,
 then draw the rectangle it should cover. See

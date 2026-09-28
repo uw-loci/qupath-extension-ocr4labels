@@ -1779,14 +1779,14 @@ public class OCRDialog {
             }
 
             RegionType type = entry.getRegionType();
-            PreparedRegion prepared = prepareRegion(bbox, type, invert);
-            if (prepared == null) {
+            List<PreparedRegion> candidates = prepareRegions(bbox, type, invert);
+            if (candidates.isEmpty()) {
                 logger.warn("Skipping rescan of field '{}': region is outside the image",
                         entry.getMetadataKey());
                 continue;
             }
 
-            tasks.add(new RescanTask(i, prepared.image, entry.getMetadataKey(), prepared.box, type, bbox));
+            tasks.add(new RescanTask(i, candidates, entry.getMetadataKey(), type, bbox));
         }
 
         if (tasks.isEmpty()) {
@@ -1810,8 +1810,7 @@ public class OCRDialog {
                     // already been cropped AND given a quiet border, so passing a rectangle
                     // sized to the original box would crop that border straight back off.
                     UnifiedDecoderService.DecodedResult result =
-                            OCRController.getInstance().decodeRegion(
-                                    task.regionImage, null, task.regionType, config);
+                            decodeBest(task.candidates, task.regionType, config).result;
 
                     // decodeRegion always returns a result; a failed decode comes back
                     // as DecodedResult.error(...) rather than null.
@@ -1961,41 +1960,93 @@ public class OCRDialog {
     }
 
     /**
-     * Crops a region for decoding the same way for every caller: real-pixel margin from
-     * {@link RegionCrop#margin}, optional inversion, then a plain quiet border.
-     * A box that hugs the ink decodes measurably worse without margin: on a test render
-     * the exact ink box read "nistology@iji.org", the padded crop "histology@lji.org".
+     * Crops a region for decoding the same way for every caller, once per margin in
+     * {@link RegionCrop#margins}: real-pixel margin, optional inversion, then a quiet border.
      *
-     * @return the prepared region, or null if nothing usable remains inside the image
+     * @return the candidate crops; empty if nothing usable remains inside the image
      */
-    private PreparedRegion prepareRegion(BoundingBox bbox, RegionType type, boolean invert) {
-        int[] box = marginAndClamp(bbox, type);
-        if (box == null) {
-            return null;
+    private List<PreparedRegion> prepareRegions(BoundingBox bbox, RegionType type, boolean invert) {
+        List<PreparedRegion> result = new ArrayList<>();
+        for (int[] margin : RegionCrop.margins(bbox.getWidth(), bbox.getHeight(), type)) {
+            int[] box = marginAndClamp(bbox, margin);
+            if (box == null) {
+                continue;
+            }
+            BufferedImage image;
+            try {
+                image = labelImage.getSubimage(box[0], box[1], box[2], box[3]);
+            } catch (Exception e) {
+                logger.warn("Failed to crop region ({},{},{},{}): {}",
+                        box[0], box[1], box[2], box[3], e.getMessage());
+                continue;
+            }
+            if (invert) {
+                image = invertImage(image);
+            }
+            int[] pad = RegionCrop.quietBorder(image.getWidth(), image.getHeight(), type);
+            image = addQuietBorder(image, type);
+            result.add(new PreparedRegion(image, box, box[0] - pad[0], box[1] - pad[1]));
         }
-        BufferedImage image;
-        try {
-            image = labelImage.getSubimage(box[0], box[1], box[2], box[3]);
-        } catch (Exception e) {
-            logger.warn("Failed to crop region ({},{},{},{}): {}",
-                    box[0], box[1], box[2], box[3], e.getMessage());
-            return null;
+        return result;
+    }
+
+    /** The winning candidate of a best-of decode and what it read. */
+    private static final class BestRead<T> {
+        final PreparedRegion region;
+        final T result;
+
+        BestRead(PreparedRegion region, T result) {
+            this.region = region;
+            this.result = result;
         }
-        if (invert) {
-            image = invertImage(image);
-        }
-        int[] pad = RegionCrop.quietBorder(image.getWidth(), image.getHeight(), type);
-        image = addQuietBorder(image, type);
-        return new PreparedRegion(image, box, box[0] - pad[0], box[1] - pad[1]);
     }
 
     /**
-     * Expands a bounding box by {@link RegionCrop#margin} and clamps it to the label image.
+     * Decodes every candidate crop and keeps the most confident read with any text.
+     * Call from a background thread; Tesseract calls must not overlap.
+     */
+    private static BestRead<UnifiedDecoderService.DecodedResult> decodeBest(
+            List<PreparedRegion> candidates, RegionType type, OCRConfiguration config) {
+        BestRead<UnifiedDecoderService.DecodedResult> best = null;
+        for (PreparedRegion candidate : candidates) {
+            UnifiedDecoderService.DecodedResult r =
+                    OCRController.getInstance().decodeRegion(candidate.image, null, type, config);
+            if (best == null
+                    || (r.hasText() && (!best.result.hasText()
+                            || r.getConfidence() > best.result.getConfidence()))) {
+                best = new BestRead<>(candidate, r);
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Runs full OCR on every candidate crop and keeps the result whose text blocks are
+     * the most confident on average. Call from a background thread.
+     */
+    private static BestRead<OCRResult> performOCRBest(List<PreparedRegion> candidates,
+                                                      OCRConfiguration config) throws OCREngine.OCRException {
+        BestRead<OCRResult> best = null;
+        double bestScore = -1;
+        for (PreparedRegion candidate : candidates) {
+            OCRResult r = OCRController.getInstance().performOCR(candidate.image, config);
+            double score = r.getReadingBlocks().stream()
+                    .mapToDouble(TextBlock::getConfidence).average().orElse(-1);
+            if (best == null || score > bestScore) {
+                best = new BestRead<>(candidate, r);
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Expands a bounding box by a margin and clamps it to the label image.
      *
+     * @param margin {padX, padY} on each side
      * @return {x, y, width, height} in image pixels, or null if nothing usable remains
      */
-    private int[] marginAndClamp(BoundingBox bbox, RegionType type) {
-        int[] margin = RegionCrop.margin(bbox.getWidth(), bbox.getHeight(), type);
+    private int[] marginAndClamp(BoundingBox bbox, int[] margin) {
         int padX = margin[0];
         int padY = margin[1];
 
@@ -2018,18 +2069,16 @@ public class OCRDialog {
      */
     private static class RescanTask {
         final int index;
-        final BufferedImage regionImage;
+        final List<PreparedRegion> candidates;
         final String metadataKey;
-        final int[] box;
         final RegionType regionType;
         final BoundingBox originalBox;
 
-        RescanTask(int index, BufferedImage regionImage, String metadataKey,
-                   int[] box, RegionType regionType, BoundingBox originalBox) {
+        RescanTask(int index, List<PreparedRegion> candidates, String metadataKey,
+                   RegionType regionType, BoundingBox originalBox) {
             this.index = index;
-            this.regionImage = regionImage;
+            this.candidates = candidates;
             this.metadataKey = metadataKey;
-            this.box = box;
             this.regionType = regionType;
             this.originalBox = originalBox;
         }
@@ -2490,10 +2539,10 @@ public class OCRDialog {
                 selectedType, bounds[0], bounds[1], bounds[2], bounds[3]);
 
         // Same crop as a decoded field row, so Draw Region and Add Field read alike
-        PreparedRegion prepared = prepareRegion(
+        List<PreparedRegion> candidates = prepareRegions(
                 new BoundingBox(bounds[0], bounds[1], bounds[2], bounds[3]),
                 selectedType, invertCheckBox.isSelected());
-        if (prepared == null) {
+        if (candidates.isEmpty()) {
             Dialogs.showWarningNotification("Selection Outside Image",
                     "The selection does not overlap the label image.");
             return;
@@ -2501,16 +2550,14 @@ public class OCRDialog {
 
         progressIndicator.setVisible(true);
 
-        final int offsetX = prepared.originX;
-        final int offsetY = prepared.originY;
-        final BufferedImage finalRegionImage = prepared.image;
+        final PreparedRegion first = candidates.get(0);
         final RegionType finalType = selectedType;
         final PSMOption selectedPSM = psmCombo.getValue();
 
         // Use unified decoding based on selected type
         if (finalType == RegionType.BARCODE) {
             // Direct barcode scanning - no OCR config needed
-            OCRController.getInstance().decodeBarcodeAsync(finalRegionImage)
+            OCRController.getInstance().decodeBarcodeAsync(first.image)
                     .thenAccept(result -> Platform.runLater(() -> {
                         progressIndicator.setVisible(false);
 
@@ -2522,7 +2569,7 @@ public class OCRDialog {
                                     "- Toggling the Invert checkbox\n" +
                                     "- Using AUTO mode to fall back to OCR");
                         } else {
-                            addBarcodeResult(result, offsetX, offsetY);
+                            addBarcodeResult(result, first.originX, first.originY);
                             String formats = result.getBarcodeCount() == 1
                                     ? result.getFormat()
                                     : result.getBarcodeCount() + " barcodes";
@@ -2552,9 +2599,11 @@ public class OCRDialog {
                     .literalText(OCRPreferences.isLiteralText())
                     .build();
 
-            OCRController.getInstance().decodeRegionAsync(finalRegionImage, null, RegionType.AUTO, config)
-                    .thenAccept(result -> Platform.runLater(() -> {
+            java.util.concurrent.CompletableFuture.supplyAsync(
+                            () -> decodeBest(candidates, RegionType.AUTO, config))
+                    .thenAccept(best -> Platform.runLater(() -> {
                         progressIndicator.setVisible(false);
+                        UnifiedDecoderService.DecodedResult result = best.result;
 
                         if (!result.hasText()) {
                             Dialogs.showInfoNotification("Auto Scan Complete",
@@ -2564,7 +2613,7 @@ public class OCRDialog {
                                     "- Toggling the Invert checkbox\n" +
                                     "- Specifying TEXT or BARCODE type explicitly");
                         } else {
-                            addUnifiedResult(result, offsetX, offsetY);
+                            addUnifiedResult(result, best.region.originX, best.region.originY);
                             String typeInfo = result.getSourceType() == RegionType.BARCODE
                                     ? String.format("[%s]", result.getFormat())
                                     : "[Text]";
@@ -2594,9 +2643,16 @@ public class OCRDialog {
                     .literalText(OCRPreferences.isLiteralText())
                     .build();
 
-            OCRController.getInstance().performOCRAsync(finalRegionImage, config)
-                    .thenAccept(result -> Platform.runLater(() -> {
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return performOCRBest(candidates, config);
+                        } catch (OCREngine.OCRException e) {
+                            throw new java.util.concurrent.CompletionException(e);
+                        }
+                    })
+                    .thenAccept(best -> Platform.runLater(() -> {
                         progressIndicator.setVisible(false);
+                        OCRResult result = best.result;
 
                         if (result.getBlockCount() == 0) {
                             Dialogs.showInfoNotification("Region Scan Complete",
@@ -2606,7 +2662,7 @@ public class OCRDialog {
                                     "- Toggling the Invert checkbox\n" +
                                     "- Making sure the text is clearly visible");
                         } else {
-                            addRegionResults(result, offsetX, offsetY, RegionType.TEXT);
+                            addRegionResults(result, best.region.originX, best.region.originY, RegionType.TEXT);
                             Dialogs.showInfoNotification("Region Scan Complete",
                                     String.format("Found %d text region(s) in the selected area.",
                                             result.getDisplayBlockCount()));

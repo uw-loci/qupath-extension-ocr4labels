@@ -83,18 +83,30 @@ public final class RegionCrop {
     }
 
     /**
-     * Real image pixels to add around a stored region before cropping it.
-     * Text margins scale with the text HEIGHT, so a wide box cannot reach the next word;
-     * barcode margins scale with the box, as ZXing's boxes can be partial.
-     *
-     * @return {padX, padY} on each side
+     * Text margins tried around a region, as fractions of its height; the most confident
+     * read wins. On a real label no single margin read every field: 0.10 read "8443",
+     * "02_IF" and "SM1-2" but not the date, 0.25 only the date. The best of the three
+     * read all of them.
      */
-    public static int[] margin(int width, int height, RegionType type) {
+    static final float[] TEXT_MARGINS = {0.10f, 0.25f, 0.40f};
+
+    /**
+     * Real image pixels to add around a stored region before cropping it, one entry per
+     * crop to try. Text margins scale with the text HEIGHT, so a wide box cannot reach the
+     * next word; barcode margins scale with the box, as ZXing's boxes can be partial.
+     *
+     * @return {padX, padY} on each side, per candidate crop
+     */
+    public static java.util.List<int[]> margins(int width, int height, RegionType type) {
         if (type == RegionType.BARCODE) {
-            return new int[] {Math.round(width * 0.125f), Math.round(height * 0.125f)};
+            return java.util.List.of(new int[] {Math.round(width * 0.125f), Math.round(height * 0.125f)});
         }
-        int pad = Math.round(height * 0.25f);
-        return new int[] {pad, pad};
+        java.util.List<int[]> result = new java.util.ArrayList<>();
+        for (float f : TEXT_MARGINS) {
+            int pad = Math.round(height * f);
+            result.add(new int[] {pad, pad});
+        }
+        return result;
     }
 
     /**

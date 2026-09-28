@@ -78,9 +78,10 @@ class RegionCropTest {
 
     @Test
     void textMarginFollowsHeightNotWidth() {
-        assertThat(RegionCrop.margin(400, 20, RegionType.TEXT)).containsExactly(5, 5);
-        assertThat(RegionCrop.margin(400, 20, RegionType.AUTO)).containsExactly(5, 5);
-        assertThat(RegionCrop.margin(400, 20, RegionType.BARCODE)).containsExactly(50, 3);
+        assertThat(RegionCrop.margins(400, 20, RegionType.TEXT))
+                .containsExactly(new int[] {2, 2}, new int[] {5, 5}, new int[] {8, 8});
+        assertThat(RegionCrop.margins(400, 20, RegionType.AUTO)).hasSize(3);
+        assertThat(RegionCrop.margins(400, 20, RegionType.BARCODE)).containsExactly(new int[] {50, 3});
     }
 
     @Test
