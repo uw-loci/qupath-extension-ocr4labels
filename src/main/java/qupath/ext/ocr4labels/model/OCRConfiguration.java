@@ -14,40 +14,50 @@ public class OCRConfiguration {
      */
     public enum PageSegMode {
         /** Orientation and script detection only */
-        OSD_ONLY(0),
+        OSD_ONLY(0, "orientation and script detection only, no text"),
         /** Automatic page segmentation with OSD */
-        AUTO_OSD(1),
+        AUTO_OSD(1, "automatic page segmentation with orientation and script detection"),
         /** Automatic page segmentation, no OSD */
-        AUTO(3),
+        AUTO(3, "fully automatic page segmentation, no orientation and script detection"),
         /** Assume a single column of text */
-        SINGLE_COLUMN(4),
+        SINGLE_COLUMN(4, "a single column of text of variable sizes"),
         /** Assume a single uniform block of vertically aligned text */
-        SINGLE_BLOCK_VERT(5),
+        SINGLE_BLOCK_VERT(5, "a single uniform block of vertically aligned text"),
         /** Assume a single uniform block of text */
-        SINGLE_BLOCK(6),
+        SINGLE_BLOCK(6, "a single uniform block of text"),
         /** Treat the image as a single text line */
-        SINGLE_LINE(7),
+        SINGLE_LINE(7, "the image is a single text line"),
         /** Treat the image as a single word */
-        SINGLE_WORD(8),
+        SINGLE_WORD(8, "the image is a single word"),
         /** Treat the image as a single word in a circle */
-        CIRCLE_WORD(9),
+        CIRCLE_WORD(9, "the image is a single word in a circle"),
         /** Treat the image as a single character */
-        SINGLE_CHAR(10),
+        SINGLE_CHAR(10, "the image is a single character"),
         /** Find as much text as possible in no particular order */
-        SPARSE_TEXT(11),
+        SPARSE_TEXT(11, "sparse text, as much text as possible in no particular order"),
         /** Sparse text with OSD */
-        SPARSE_TEXT_OSD(12),
+        SPARSE_TEXT_OSD(12, "sparse text with orientation and script detection"),
         /** Raw line - treat the image as a single text line, no hacks */
-        RAW_LINE(13);
+        RAW_LINE(13, "the image is a single text line, bypassing Tesseract-specific hacks");
 
         private final int value;
+        private final String tesseractMeaning;
 
-        PageSegMode(int value) {
+        PageSegMode(int value, String tesseractMeaning) {
             this.value = value;
+            this.tesseractMeaning = tesseractMeaning;
         }
 
         public int getValue() {
             return value;
+        }
+
+        /**
+         * @return this mode as Tesseract defines it, e.g.
+         *         "AUTO = Tesseract PSM 3 (fully automatic page segmentation, ...)"
+         */
+        public String describe() {
+            return name() + " = Tesseract PSM " + value + " (" + tesseractMeaning + ")";
         }
 
         /**

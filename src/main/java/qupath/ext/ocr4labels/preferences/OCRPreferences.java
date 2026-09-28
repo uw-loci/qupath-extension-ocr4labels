@@ -92,6 +92,7 @@ public class OCRPreferences {
         pageSegModeProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "pageSegMode", DEFAULT_PAGE_SEG_MODE);
         migratePageSegModeDefault();
+        logger.info("OCR page segmentation preference: {}", getPageSegMode().describe());
 
         metadataPrefixProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "metadataPrefix", DEFAULT_METADATA_PREFIX);

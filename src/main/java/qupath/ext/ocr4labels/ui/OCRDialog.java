@@ -1755,7 +1755,7 @@ public class OCRDialog {
         // around a barcode to decode it, so barcode regions get padded outward.
         OCRConfiguration config = OCRConfiguration.builder()
                 .pageSegMode(selectedPSM != null ? selectedPSM.getMode()
-                        : OCRConfiguration.PageSegMode.SINGLE_BLOCK)
+                        : OCRConfiguration.PageSegMode.AUTO)
                 .language(OCRPreferences.getLanguage())
                 .minConfidence(0.1) // Low threshold: the region is already known to hold content
                 .autoRotate(OCRPreferences.isAutoRotate())
@@ -3782,7 +3782,8 @@ public class OCRDialog {
                     script.append("    .singleWord()\n");
                     break;
                 default:
-                    script.append("    .sparseText()\n");
+                    script.append("    .pageSegMode(qupath.ext.ocr4labels.model.OCRConfiguration.PageSegMode.")
+                            .append(selectedPSM.getMode().name()).append(")\n");
             }
         }
 

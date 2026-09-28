@@ -35,6 +35,8 @@ public class OCREngine {
     private boolean initialized = false;
     private String tessdataPath;
     private int currentPageSegMode = ITessAPI.TessPageSegMode.PSM_AUTO;
+    // Last page segmentation setup written to the log; logged again only when it changes
+    private String loggedSegmentationSetup = null;
     private boolean osdAvailable = false;
 
     // Staged once per JVM; see applyLiteralTextMode(boolean)
@@ -242,12 +244,28 @@ public class OCREngine {
     }
 
     /**
+     * Logs the page segmentation mode Tesseract will use and the orientation settings.
+     * Logged once, then again only when it changes.
+     */
+    private void logSegmentationSetup(OCRConfiguration config) {
+        String setup = config.getPageSegMode().describe()
+                + "; separate orientation pass: " + (config.isDetectOrientation() ? "on" : "off")
+                + ", auto-rotate: " + (config.isAutoRotate() ? "on" : "off")
+                + (osdAvailable ? "" : " (osd.traineddata missing, orientation pass skipped)");
+        if (!setup.equals(loggedSegmentationSetup)) {
+            logger.info("OCR page segmentation: {}", setup);
+            loggedSegmentationSetup = setup;
+        }
+    }
+
+    /**
      * Applies configuration settings to the Tesseract instance.
      * Character whitelist support inspired by zindy/qupath-extension-ocr.
      */
     private void applyConfiguration(OCRConfiguration config) {
         currentPageSegMode = config.getPageSegMode().getValue();
         tesseract.setPageSegMode(currentPageSegMode);
+        logSegmentationSetup(config);
         tesseract.setOcrEngineMode(config.getEngineMode().getValue());
 
         if (config.getLanguage() != null && !config.getLanguage().isEmpty()) {
