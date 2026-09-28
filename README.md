@@ -121,9 +121,17 @@ The saved template preserves each region's position, type, and metadata key. Whe
    - Click **Create from Current Image** to use the single-image dialog
    - Or click **Load Template...** to use a previously saved template
 4. Review field mappings in the template table (includes Type column)
-5. Click **Process All** to run OCR/barcode scanning on all images
-6. Review and edit results in the results table
-7. Click **Apply Metadata** to save to all images
+5. Click **Choose Images...** and tick the images this template fits (filter by name or by
+   existing metadata; **Select all** / **Select none** act on the images the filter shows)
+6. Click **Process Images** to run OCR/barcode scanning on the listed images
+7. Review and edit results in the results table
+8. Click **Apply Metadata** to save to the processed images
+
+A template only fits labels with the same layout. If a project mixes layouts (say H&E
+slides and IF slides with differently printed labels), do one layout at a time: choose
+its images, load its template, process, apply; then choose the next layout's images and
+load its template. Metadata already applied is kept. Until you choose, every image with
+a label image is listed.
 
 ---
 
@@ -397,7 +405,7 @@ Displays information about the current project:
 
 ### Results Section
 
-After clicking **Process All**, results appear in the table:
+After clicking **Process Images**, results appear in the table:
 
 | Column | Description |
 |--------|-------------|
@@ -426,7 +434,8 @@ The **Match All** button applies vocabulary matching across ALL processed images
 
 | Control | Description |
 |---------|-------------|
-| **Process All** | Run OCR/barcode scanning on all images using current template |
+| **Choose Images...** (top) | Pick which images are listed and processed |
+| **Process Images** | Run OCR/barcode scanning on the listed images using current template |
 | **Apply Metadata** | Save metadata to all successfully processed images |
 | **Cancel** | Close dialog and cancel any running processing |
 
@@ -1078,9 +1087,10 @@ Status indicators show `[Installed]` or `[Not found]` for each file.
 5. Click **Save Template...** -> save as `lab_template.json`
 6. Close OCR dialog
 7. Click **Load Template...** -> select `lab_template.json`
-8. Click **Process All** (wait for completion)
-9. Review results, edit any errors
-10. Click **Apply Metadata**
+8. Click **Choose Images...** and tick the slides with this label layout
+9. Click **Process Images** (wait for completion)
+10. Review results, edit any errors
+11. Click **Apply Metadata**
 
 ### Example 5: Vocabulary Matching for Sample Names
 

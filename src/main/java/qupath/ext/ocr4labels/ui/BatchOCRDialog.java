@@ -55,6 +55,9 @@ public class BatchOCRDialog {
     private final Project<?> project;
     private final OCREngine ocrEngine;
     private List<ProjectImageEntry<?>> imagesWithLabels;
+    // Images picked with "Choose Images..."; null until the user picks, meaning all with labels
+    private Set<ProjectImageEntry<?>> chosenImages;
+    private Label selectionLabel;
 
     private Stage stage;
     private OCRTemplate currentTemplate;
@@ -152,9 +155,59 @@ public class BatchOCRDialog {
         stage.setScene(scene);
         stage.show();
 
-        // Initialize image entries
+        rebuildImageEntries();
+    }
+
+    /**
+     * Lists the images to process: those with a label image, narrowed to the chosen
+     * images once the user has picked. Rows kept from before keep their results.
+     */
+    private void rebuildImageEntries() {
+        Map<ProjectImageEntry<?>, ImageProcessingEntry> existing = new HashMap<>();
+        for (ImageProcessingEntry e : imageEntries) {
+            existing.put(e.getProjectEntry(), e);
+        }
+        List<ImageProcessingEntry> rows = new ArrayList<>();
         for (ProjectImageEntry<?> entry : imagesWithLabels) {
-            imageEntries.add(new ImageProcessingEntry(entry));
+            if (chosenImages == null || chosenImages.contains(entry)) {
+                ImageProcessingEntry row = existing.get(entry);
+                rows.add(row != null ? row : new ImageProcessingEntry(entry));
+            }
+        }
+        imageEntries.setAll(rows);
+        updateSelectionLabel();
+    }
+
+    private void updateSelectionLabel() {
+        if (selectionLabel != null) {
+            selectionLabel.setText(String.format(
+                    "%d of %d images with labels will be processed (%d images in project).",
+                    imageEntries.size(), imagesWithLabels.size(), project.getImageList().size()));
+        }
+    }
+
+    /**
+     * Lets the user pick which images this template is run on, so a project holding
+     * several label layouts can be processed one layout (template) at a time.
+     */
+    @SuppressWarnings("unchecked")
+    private void chooseImages() {
+        List<ProjectImageEntry<BufferedImage>> preselect = new ArrayList<>();
+        for (ImageProcessingEntry e : imageEntries) {
+            preselect.add((ProjectImageEntry<BufferedImage>) e.getProjectEntry());
+        }
+        var chosen = ProjectImageSelector.showDialog(stage, (Project<BufferedImage>) project,
+                "Batch OCR - Choose Images", preselect);
+        if (chosen.isEmpty()) {
+            return;
+        }
+        chosenImages = new HashSet<>(chosen.get());
+        long withoutLabel = chosenImages.stream().filter(e -> !imagesWithLabels.contains(e)).count();
+        rebuildImageEntries();
+        if (withoutLabel > 0) {
+            Dialogs.showWarningNotification("Batch OCR - Images Skipped", String.format(
+                    "%d of the chosen images have no label image and will not be processed.",
+                    withoutLabel));
         }
     }
 
@@ -166,18 +219,26 @@ public class BatchOCRDialog {
         Label titleLabel = new Label("Batch OCR Processing");
         titleLabel.setStyle("-fx-font-size: 16px; -fx-font-weight: bold;");
 
-        Label infoLabel = new Label(String.format(
-                "Found %d images with labels out of %d total images in project.",
-                imagesWithLabels.size(), project.getImageList().size()));
+        selectionLabel = new Label();
+        Button chooseButton = new Button("Choose Images...");
+        chooseButton.setTooltip(new Tooltip(
+                "Pick which images this template is run on.\n\n"
+                + "A template only fits labels with the same layout. If the project mixes\n"
+                + "layouts, choose one layout's images, load its template, process and apply,\n"
+                + "then repeat for the next. Filter by name or by existing metadata."));
+        chooseButton.setOnAction(e -> chooseImages());
+        HBox selectionRow = new HBox(10, selectionLabel, chooseButton);
+        selectionRow.setAlignment(Pos.CENTER_LEFT);
+        updateSelectionLabel();
 
         Label instructionLabel = new Label(
                 "1. Create a template by running OCR on a sample image, or load a saved template.\n" +
-                "2. Review the field mappings below.\n" +
-                "3. Click 'Process All' to run OCR on all images.\n" +
+                "2. Click 'Choose Images...' to pick the images that template fits.\n" +
+                "3. Click 'Process Images' to run OCR on the listed images.\n" +
                 "4. Review results and click 'Apply Metadata' to save.");
         instructionLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #666666;");
 
-        header.getChildren().addAll(titleLabel, infoLabel, instructionLabel);
+        header.getChildren().addAll(titleLabel, selectionRow, instructionLabel);
         return header;
     }
 
@@ -283,7 +344,8 @@ public class BatchOCRDialog {
 
         // Results table with editable cells
         resultsTable = new TableView<>(imageEntries);
-        resultsTable.setPlaceholder(new Label("Click 'Process All' to run OCR on all images."));
+        resultsTable.setPlaceholder(new Label(
+                "No images listed. Use 'Choose Images...' above, or load a template."));
         resultsTable.setEditable(true);
 
         // Fixed columns (non-editable)
@@ -657,8 +719,10 @@ public class BatchOCRDialog {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        processButton = new Button("Process All");
-        processButton.setTooltip(new Tooltip("Run OCR on all images using the current template"));
+        processButton = new Button("Process Images");
+        processButton.setTooltip(new Tooltip(
+                "Run OCR on the listed images using the current template.\n"
+                + "Use 'Choose Images...' to change which images are listed."));
         processButton.setOnAction(e -> processAllImages());
         processButton.setDisable(true); // Enabled when template is loaded
 
@@ -780,7 +844,7 @@ public class BatchOCRDialog {
 
                     Dialogs.showInfoNotification("Template Created",
                             String.format("Created template with %d field mappings.\n" +
-                                    "Edit the metadata keys as needed, then click 'Process All'.",
+                                    "Edit the metadata keys as needed, then click 'Process Images'.",
                                     currentTemplate.getFieldMappings().size()));
                 });
 
@@ -830,11 +894,7 @@ public class BatchOCRDialog {
                 logger.info("Re-scanned with extraction config '{}': {} images found",
                         currentTemplate.getLabelExtraction().getSourceImageName(),
                         imagesWithLabels.size());
-                // Refresh the results table entries
-                imageEntries.clear();
-                for (var entry : imagesWithLabels) {
-                    imageEntries.add(new ImageProcessingEntry(entry));
-                }
+                rebuildImageEntries();
             }
 
             // Update results table columns to match template fields
@@ -906,6 +966,12 @@ public class BatchOCRDialog {
         if (enabledCount == 0) {
             Dialogs.showWarningNotification("No Fields Enabled",
                     "Please enable at least one field mapping.");
+            return;
+        }
+
+        if (imageEntries.isEmpty()) {
+            Dialogs.showWarningNotification("No Images",
+                    "No images are listed. Use 'Choose Images...' to pick some.");
             return;
         }
 
