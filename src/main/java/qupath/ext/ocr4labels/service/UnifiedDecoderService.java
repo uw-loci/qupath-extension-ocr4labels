@@ -11,6 +11,7 @@ import qupath.ext.ocr4labels.model.TextBlock;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -243,7 +244,8 @@ public class UnifiedDecoderService {
             float avgConfidence = 0;
             BoundingBox combinedBbox = null;
 
-            for (TextBlock block : result.getTextBlocks()) {
+            List<TextBlock> readingBlocks = result.getReadingBlocks();
+            for (TextBlock block : readingBlocks) {
                 if (block.getText() != null && !block.getText().isEmpty()) {
                     if (combined.length() > 0) {
                         combined.append(" ");
@@ -264,7 +266,7 @@ public class UnifiedDecoderService {
                 return DecodedResult.empty(RegionType.TEXT, processingTime);
             }
 
-            avgConfidence /= result.getTextBlocks().size();
+            avgConfidence /= readingBlocks.size();
 
             // Adjust bounding box for region offset
             if (combinedBbox != null && region != null) {

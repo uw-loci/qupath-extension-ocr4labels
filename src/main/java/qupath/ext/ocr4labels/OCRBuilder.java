@@ -468,7 +468,7 @@ public class OCRBuilder {
             engine.initialize(tessdataPath, language);
             OCRResult result = engine.processImage(processedImage, config);
 
-            return result.getTextBlocks().stream()
+            return result.getReadingBlocks().stream()
                     .map(block -> block.getText())
                     .filter(text -> text != null && !text.isEmpty())
                     .distinct()

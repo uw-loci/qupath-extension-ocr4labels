@@ -63,10 +63,6 @@ tasks.withType<JavaCompile> {
 
 tasks.test {
     useJUnitPlatform()
-    jvmArgs = listOf(
-        "--add-modules", "javafx.base,javafx.graphics,javafx.controls",
-        "--add-opens", "javafx.graphics/javafx.stage=ALL-UNNAMED"
-    )
 }
 
 // ---------------------------------------------------------------------------

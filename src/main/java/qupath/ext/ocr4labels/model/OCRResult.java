@@ -82,12 +82,24 @@ public class OCRResult {
     }
 
     /**
-     * Gets the full concatenated text from all blocks.
+     * The blocks to read the text from: the LINE blocks, or the WORD blocks when no line
+     * was found. The engine returns both levels for the same ink, so joining every block
+     * repeats the text ("610 TOMO" becomes "610 TOMO 610 TOMO").
      *
-     * @return All detected text joined with spaces
+     * @return one level of blocks covering the detected text once
+     */
+    public List<TextBlock> getReadingBlocks() {
+        List<TextBlock> lines = getTextBlocksByType(TextBlock.BlockType.LINE);
+        return lines.isEmpty() ? getTextBlocksByType(TextBlock.BlockType.WORD) : lines;
+    }
+
+    /**
+     * Gets the detected text, each line (or word, if no lines were found) once.
+     *
+     * @return the text of {@link #getReadingBlocks()} joined with spaces
      */
     public String getFullText() {
-        return textBlocks.stream()
+        return getReadingBlocks().stream()
                 .map(TextBlock::getText)
                 .filter(text -> !text.isEmpty())
                 .collect(Collectors.joining(" "));
