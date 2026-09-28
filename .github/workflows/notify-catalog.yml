@@ -66,13 +66,16 @@ jobs:
           echo "asset_url=$ASSET_URL" >> "$GITHUB_OUTPUT"
           echo "Resolved: tag=$TAG asset=$ASSET_URL"
 
-      - name: Send release event to catalog
+      - name: Send release event to catalogs
         env:
           GH_TOKEN: ${{ secrets.CATALOG_DISPATCH_TOKEN }}
         run: |
           set -euo pipefail
-          gh api repos/uw-loci/qupath-catalog-qpsc/dispatches \
-            -f event_type=extension-release \
-            -F "client_payload[repo]=${{ github.repository }}" \
-            -F "client_payload[tag]=${{ steps.rel.outputs.tag }}" \
-            -F "client_payload[asset_url]=${{ steps.rel.outputs.asset_url }}"
+          # Listed in both catalogs; each must be told or it keeps serving the old jar.
+          for catalog in qupath-catalog-qpsc qupath-catalog-mikenelson; do
+            gh api "repos/uw-loci/$catalog/dispatches" \
+              -f event_type=extension-release \
+              -F "client_payload[repo]=${{ github.repository }}" \
+              -F "client_payload[tag]=${{ steps.rel.outputs.tag }}" \
+              -F "client_payload[asset_url]=${{ steps.rel.outputs.asset_url }}"
+          done
