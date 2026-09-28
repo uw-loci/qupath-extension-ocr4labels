@@ -97,6 +97,11 @@ You can define template regions manually without scanning, which is useful when 
 6. Edit the **Metadata Key** column to set meaningful field names
 7. Click **Save Template...** to save the regions for batch use
 
+However you draw it, the rectangle shrinks to the text inside it (it never grows past
+what you drew), so a loose box and a tight one read the same. Leave some slack rather than
+drawing right against the letters. Add Field, Add Region and Draw Region all crop a region
+the same way before reading it.
+
 Alternatively, work in the other direction: click **Add Field** to create the row first,
 then draw the rectangle it should cover. See
 [Add Field and Add Region](#add-field-and-add-region) for which to reach for.

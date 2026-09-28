@@ -35,6 +35,7 @@ import qupath.ext.ocr4labels.model.TextBlock;
 import qupath.ext.ocr4labels.service.UnifiedDecoderService;
 import qupath.ext.ocr4labels.preferences.OCRPreferences;
 import qupath.ext.ocr4labels.service.OCREngine;
+import qupath.ext.ocr4labels.utilities.RegionCrop;
 import qupath.ext.ocr4labels.utilities.LabelImageUtility;
 import qupath.ext.ocr4labels.utilities.MetadataKeyValidator;
 import qupath.ext.ocr4labels.utilities.OCRMetadataManager;
@@ -1778,37 +1779,14 @@ public class OCRDialog {
             }
 
             RegionType type = entry.getRegionType();
-            // Text regions need margin too. A detection box hugs the ink, and decoding a
-            // crop taken exactly on that box measurably damages the result: on a test
-            // render, the exact ink box read "nistology@iji.org" where the same crop with
-            // 8px of padding read "histology@lji.org". Barcodes need more, because ZXing
-            // requires a quiet zone.
-            double dilation = (type == RegionType.BARCODE || type == RegionType.AUTO) ? 0.25 : 0.15;
-            int[] box = dilateAndClamp(bbox, dilation);
-            if (box == null) {
+            PreparedRegion prepared = prepareRegion(bbox, type, invert);
+            if (prepared == null) {
                 logger.warn("Skipping rescan of field '{}': region is outside the image",
                         entry.getMetadataKey());
                 continue;
             }
 
-            BufferedImage regionImage;
-            try {
-                regionImage = labelImage.getSubimage(box[0], box[1], box[2], box[3]);
-            } catch (Exception e) {
-                logger.warn("Failed to crop region for field '{}': {}",
-                        entry.getMetadataKey(), e.getMessage());
-                continue;
-            }
-
-            if (invert) {
-                regionImage = invertImage(regionImage);
-            }
-
-            // Dilation cannot help a region that sits against the edge of the label, where
-            // clamping leaves no margin at all. Add a quiet border so every crop has one.
-            regionImage = addQuietBorder(regionImage, invert);
-
-            tasks.add(new RescanTask(i, regionImage, entry.getMetadataKey(), box, type, bbox));
+            tasks.add(new RescanTask(i, prepared.image, entry.getMetadataKey(), prepared.box, type, bbox));
         }
 
         if (tasks.isEmpty()) {
@@ -1946,39 +1924,80 @@ public class OCRDialog {
      * it expects. Tesseract and ZXing both read a crop that runs right to the glyph or
      * barcode edge noticeably worse than the same crop with margin around it.
      *
-     * @param region   the cropped region
-     * @param inverted true if the region has been colour-inverted, so the border is
-     *                 drawn black to match the new background rather than white
-     * @return a new image with the border applied
+     * @param region the cropped region
+     * @param type   what the region is decoded as; see {@link RegionCrop#quietBorder}
+     * @return a new image with the border, in the region's own background colour
      */
-    private BufferedImage addQuietBorder(BufferedImage region, boolean inverted) {
-        int pad = Math.max(8, Math.round(region.getHeight() * 0.2f));
+    private BufferedImage addQuietBorder(BufferedImage region, RegionType type) {
+        int[] pad = RegionCrop.quietBorder(region.getWidth(), region.getHeight(), type);
         BufferedImage padded = new BufferedImage(
-                region.getWidth() + pad * 2, region.getHeight() + pad * 2,
+                region.getWidth() + pad[0] * 2, region.getHeight() + pad[1] * 2,
                 BufferedImage.TYPE_INT_RGB);
 
         java.awt.Graphics2D g = padded.createGraphics();
         try {
-            g.setColor(inverted ? java.awt.Color.BLACK : java.awt.Color.WHITE);
+            g.setColor(new java.awt.Color(RegionCrop.backgroundRgb(region)));
             g.fillRect(0, 0, padded.getWidth(), padded.getHeight());
-            g.drawImage(region, pad, pad, null);
+            g.drawImage(region, pad[0], pad[1], null);
         } finally {
             g.dispose();
         }
         return padded;
     }
 
+    /** A region cropped for decoding, and where its pixel (0,0) sits in the label image. */
+    private static final class PreparedRegion {
+        final BufferedImage image;
+        final int[] box;
+        final int originX;
+        final int originY;
+
+        PreparedRegion(BufferedImage image, int[] box, int originX, int originY) {
+            this.image = image;
+            this.box = box;
+            this.originX = originX;
+            this.originY = originY;
+        }
+    }
+
     /**
-     * Expands a bounding box by the given fraction of its size and clamps it to the
-     * label image, so a tight box still gives the decoder some margin to work with.
+     * Crops a region for decoding the same way for every caller: real-pixel margin from
+     * {@link RegionCrop#margin}, optional inversion, then a plain quiet border.
+     * A box that hugs the ink decodes measurably worse without margin: on a test render
+     * the exact ink box read "nistology@iji.org", the padded crop "histology@lji.org".
      *
-     * @param bbox     the region to expand
-     * @param dilation fraction to grow by on each side (0.25 = 25% larger)
+     * @return the prepared region, or null if nothing usable remains inside the image
+     */
+    private PreparedRegion prepareRegion(BoundingBox bbox, RegionType type, boolean invert) {
+        int[] box = marginAndClamp(bbox, type);
+        if (box == null) {
+            return null;
+        }
+        BufferedImage image;
+        try {
+            image = labelImage.getSubimage(box[0], box[1], box[2], box[3]);
+        } catch (Exception e) {
+            logger.warn("Failed to crop region ({},{},{},{}): {}",
+                    box[0], box[1], box[2], box[3], e.getMessage());
+            return null;
+        }
+        if (invert) {
+            image = invertImage(image);
+        }
+        int[] pad = RegionCrop.quietBorder(image.getWidth(), image.getHeight(), type);
+        image = addQuietBorder(image, type);
+        return new PreparedRegion(image, box, box[0] - pad[0], box[1] - pad[1]);
+    }
+
+    /**
+     * Expands a bounding box by {@link RegionCrop#margin} and clamps it to the label image.
+     *
      * @return {x, y, width, height} in image pixels, or null if nothing usable remains
      */
-    private int[] dilateAndClamp(BoundingBox bbox, double dilation) {
-        int padX = (int) Math.round(bbox.getWidth() * dilation / 2.0);
-        int padY = (int) Math.round(bbox.getHeight() * dilation / 2.0);
+    private int[] marginAndClamp(BoundingBox bbox, RegionType type) {
+        int[] margin = RegionCrop.margin(bbox.getWidth(), bbox.getHeight(), type);
+        int padX = margin[0];
+        int padY = margin[1];
 
         int x = Math.max(0, bbox.getX() - padX);
         int y = Math.max(0, bbox.getY() - padY);
@@ -2459,35 +2478,32 @@ public class OCRDialog {
             return;
         }
 
-        double scaleX = imageView.getBoundsInLocal().getWidth() / labelImage.getWidth();
-        double scaleY = imageView.getBoundsInLocal().getHeight() / labelImage.getHeight();
-        double scale = Math.min(scaleX, scaleY);
-
-        int imgX = (int) Math.max(0, Math.min(selectionStartX, selectionEndX) / scale);
-        int imgY = (int) Math.max(0, Math.min(selectionStartY, selectionEndY) / scale);
-        int imgW = (int) Math.min(labelImage.getWidth() - imgX, Math.abs(selectionEndX - selectionStartX) / scale);
-        int imgH = (int) Math.min(labelImage.getHeight() - imgY, Math.abs(selectionEndY - selectionStartY) / scale);
-
-        if (imgW < 5 || imgH < 5) {
+        int[] bounds = selectionToImageBounds();
+        if (bounds == null) {
             Dialogs.showWarningNotification("Selection Too Small",
                     "Please draw a larger selection area.");
             return;
         }
 
         RegionType selectedType = regionTypeCombo.getValue();
-        logger.info("Scanning region as {}: x={}, y={}, w={}, h={}", selectedType, imgX, imgY, imgW, imgH);
+        logger.info("Scanning region as {}: x={}, y={}, w={}, h={}",
+                selectedType, bounds[0], bounds[1], bounds[2], bounds[3]);
 
-        BufferedImage regionImage = labelImage.getSubimage(imgX, imgY, imgW, imgH);
-
-        if (invertCheckBox.isSelected()) {
-            regionImage = invertImage(regionImage);
+        // Same crop as a decoded field row, so Draw Region and Add Field read alike
+        PreparedRegion prepared = prepareRegion(
+                new BoundingBox(bounds[0], bounds[1], bounds[2], bounds[3]),
+                selectedType, invertCheckBox.isSelected());
+        if (prepared == null) {
+            Dialogs.showWarningNotification("Selection Outside Image",
+                    "The selection does not overlap the label image.");
+            return;
         }
 
         progressIndicator.setVisible(true);
 
-        final int offsetX = imgX;
-        final int offsetY = imgY;
-        final BufferedImage finalRegionImage = regionImage;
+        final int offsetX = prepared.originX;
+        final int offsetY = prepared.originY;
+        final BufferedImage finalRegionImage = prepared.image;
         final RegionType finalType = selectedType;
         final PSMOption selectedPSM = psmCombo.getValue();
 
@@ -2536,9 +2552,7 @@ public class OCRDialog {
                     .literalText(OCRPreferences.isLiteralText())
                     .build();
 
-            java.awt.Rectangle region = new java.awt.Rectangle(0, 0, imgW, imgH);
-
-            OCRController.getInstance().decodeRegionAsync(finalRegionImage, region, RegionType.AUTO, config)
+            OCRController.getInstance().decodeRegionAsync(finalRegionImage, null, RegionType.AUTO, config)
                     .thenAccept(result -> Platform.runLater(() -> {
                         progressIndicator.setVisible(false);
 
@@ -3233,7 +3247,8 @@ public class OCRDialog {
 
     /**
      * Converts the drawn selection rectangle from canvas coordinates to label-image
-     * pixel coordinates.
+     * pixel coordinates, snapped to the ink inside it so the result does not depend on
+     * how much slack was drawn around the text.
      *
      * @return {x, y, width, height} in image pixels, or null if the selection is too small
      */
@@ -3256,7 +3271,9 @@ public class OCRDialog {
         if (imgW < 5 || imgH < 5) {
             return null;
         }
-        return new int[]{imgX, imgY, imgW, imgH};
+        java.awt.Rectangle snapped = RegionCrop.snapToInk(labelImage,
+                new java.awt.Rectangle(imgX, imgY, imgW, imgH), invertCheckBox.isSelected());
+        return new int[]{snapped.x, snapped.y, snapped.width, snapped.height};
     }
 
     /**
@@ -3267,20 +3284,16 @@ public class OCRDialog {
     private void addRegionFromSelection() {
         if (!hasSelection || labelImage == null) return;
 
-        double scaleX = imageView.getBoundsInLocal().getWidth() / labelImage.getWidth();
-        double scaleY = imageView.getBoundsInLocal().getHeight() / labelImage.getHeight();
-        double scale = Math.min(scaleX, scaleY);
-
-        int imgX = (int) Math.max(0, Math.min(selectionStartX, selectionEndX) / scale);
-        int imgY = (int) Math.max(0, Math.min(selectionStartY, selectionEndY) / scale);
-        int imgW = (int) Math.min(labelImage.getWidth() - imgX, Math.abs(selectionEndX - selectionStartX) / scale);
-        int imgH = (int) Math.min(labelImage.getHeight() - imgY, Math.abs(selectionEndY - selectionStartY) / scale);
-
-        if (imgW < 5 || imgH < 5) {
+        int[] bounds = selectionToImageBounds();
+        if (bounds == null) {
             Dialogs.showWarningNotification("Selection Too Small",
                     "Please draw a larger selection area.");
             return;
         }
+        int imgX = bounds[0];
+        int imgY = bounds[1];
+        int imgW = bounds[2];
+        int imgH = bounds[3];
 
         saveStateForUndo();
         String prefix = OCRPreferences.getMetadataPrefix();
@@ -3546,7 +3559,7 @@ public class OCRDialog {
 
             // Same quiet zone the rescan path applies - a crop that runs to the glyph
             // edge decodes measurably worse than one with margin around it.
-            regionImage = addQuietBorder(regionImage, invert);
+            regionImage = addQuietBorder(regionImage, regionType);
 
             tasks.add(new TemplateRegionTask(regionImage, mapping.getMetadataKey(),
                     box, mapping.getRegionType()));
