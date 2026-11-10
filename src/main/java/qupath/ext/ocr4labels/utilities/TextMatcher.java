@@ -190,7 +190,7 @@ public class TextMatcher {
     public void loadVocabularyFromFile(File file) throws IOException {
         vocabulary.clear();
 
-        String filename = file.getName().toLowerCase();
+        String filename = file.getName().toLowerCase(Locale.ROOT);
         boolean isCSV = filename.endsWith(".csv");
         boolean isTSV = filename.endsWith(".tsv") || filename.endsWith(".txt");
 
@@ -238,7 +238,7 @@ public class TextMatcher {
      * Checks if a line looks like a CSV/TSV header.
      */
     private boolean looksLikeHeader(String line) {
-        String lower = line.toLowerCase();
+        String lower = line.toLowerCase(Locale.ROOT);
         return lower.contains("sample") || lower.contains("name") ||
                lower.contains("id") || lower.contains("code") ||
                lower.contains("label") || lower.contains("value") ||
@@ -274,13 +274,13 @@ public class TextMatcher {
             return null;
         }
 
-        String normalizedInput = caseInsensitive ? ocrText.toLowerCase() : ocrText;
+        String normalizedInput = caseInsensitive ? ocrText.toLowerCase(Locale.ROOT) : ocrText;
 
         MatchResult bestMatch = null;
         double bestScore = Double.MAX_VALUE;
 
         for (String candidate : vocabulary) {
-            String normalizedCandidate = caseInsensitive ? candidate.toLowerCase() : candidate;
+            String normalizedCandidate = caseInsensitive ? candidate.toLowerCase(Locale.ROOT) : candidate;
 
             // Exact match - return immediately with perfect score
             if (normalizedInput.equals(normalizedCandidate)) {
@@ -321,11 +321,11 @@ public class TextMatcher {
             return Collections.emptyList();
         }
 
-        String normalizedInput = caseInsensitive ? ocrText.toLowerCase() : ocrText;
+        String normalizedInput = caseInsensitive ? ocrText.toLowerCase(Locale.ROOT) : ocrText;
         List<MatchResult> matches = new ArrayList<>();
 
         for (String candidate : vocabulary) {
-            String normalizedCandidate = caseInsensitive ? candidate.toLowerCase() : candidate;
+            String normalizedCandidate = caseInsensitive ? candidate.toLowerCase(Locale.ROOT) : candidate;
 
             // Quick length check
             int lenDiff = Math.abs(normalizedInput.length() - normalizedCandidate.length());

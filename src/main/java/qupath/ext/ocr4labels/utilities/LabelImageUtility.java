@@ -10,6 +10,7 @@ import java.awt.image.BufferedImage;
 import java.awt.image.WritableRaster;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Locale;
 
 /**
  * Utility class for retrieving and working with label images from whole slide images.
@@ -65,9 +66,9 @@ public class LabelImageUtility {
             // Check for names containing label keywords (case-insensitive)
             String[] keywords = getLabelKeywords();
             for (String imageName : associatedImages) {
-                String lowerName = imageName.toLowerCase();
+                String lowerName = imageName.toLowerCase(Locale.ROOT);
                 for (String keyword : keywords) {
-                    if (lowerName.contains(keyword.toLowerCase())) {
+                    if (lowerName.contains(keyword.toLowerCase(Locale.ROOT))) {
                         return true;
                     }
                 }
@@ -112,9 +113,9 @@ public class LabelImageUtility {
             // Try finding any image containing label keywords (case-insensitive)
             String[] keywords = getLabelKeywords();
             for (String imageName : associatedImages) {
-                String lowerName = imageName.toLowerCase();
+                String lowerName = imageName.toLowerCase(Locale.ROOT);
                 for (String keyword : keywords) {
-                    if (lowerName.contains(keyword.toLowerCase())) {
+                    if (lowerName.contains(keyword.toLowerCase(Locale.ROOT))) {
                         logger.info("Found label image by keyword '{}': {}", keyword, imageName);
                         BufferedImage img = retrieveImageByName(server, imageName);
                         if (img != null) {
@@ -187,9 +188,9 @@ public class LabelImageUtility {
             // Try finding by keyword
             String[] keywords = getLabelKeywords();
             for (String imageName : associatedImages) {
-                String lowerName = imageName.toLowerCase();
+                String lowerName = imageName.toLowerCase(Locale.ROOT);
                 for (String keyword : keywords) {
-                    if (lowerName.contains(keyword.toLowerCase())) {
+                    if (lowerName.contains(keyword.toLowerCase(Locale.ROOT))) {
                         return imageName;
                     }
                 }

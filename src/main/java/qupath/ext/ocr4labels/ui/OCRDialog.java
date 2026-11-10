@@ -59,6 +59,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.ResourceBundle;
 
@@ -76,6 +77,14 @@ public class OCRDialog {
     // Scan scope options
     private static final String SCOPE_FULL_IMAGE = "Full Image";
     private static final String SCOPE_SELECTION = "Selection";
+
+    /**
+     * A number for the generated Groovy script. Locale.ROOT: "0,50" from a decimal-comma
+     * locale would turn {@code .minConfidence(0,50)} into a call with two arguments.
+     */
+    static String scriptNumber(double value) {
+        return String.format(Locale.ROOT, "%.2f", value);
+    }
     private static final String SCOPE_DRAWN_REGIONS = "Drawn Regions";
 
     private final QuPathGUI qupath;
@@ -3866,7 +3875,7 @@ public class OCRDialog {
             script.append("    .invert()\n");
         }
 
-        script.append("    .minConfidence(").append(String.format("%.2f", confidence)).append(")\n");
+        script.append("    .minConfidence(").append(scriptNumber(confidence)).append(")\n");
         script.append("    .run()\n\n");
 
         script.append("// Apply detected text to metadata fields\n");
